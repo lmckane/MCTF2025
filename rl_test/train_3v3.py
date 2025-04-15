@@ -26,11 +26,11 @@ import time
 from pyquaticus.envs.pyquaticus import Team
 import pyquaticus
 from pyquaticus import pyquaticus_v0
-from ray import air, tune
+from ray import air, tunes
 from ray.rllib.algorithms.ppo import PPOTF2Policy, PPOConfig
 from ray.rllib.policy.policy import PolicySpec, Policy
 import os
-import pyquaticus.utils.rewards as rew
+import MCTF2025.rewards as rew
 from pyquaticus.base_policies.base_policies import DefendGen, AttackGen
 from pyquaticus.config import config_dict_std
 import logging

@@ -1,0 +1,9 @@
+Metadata-Version: 2.2
+Name: hrl
+Version: 0.1.0
+Requires-Dist: numpy
+Requires-Dist: matplotlib
+Requires-Dist: gymnasium
+Requires-Dist: pyquaticus
+Requires-Dist: ray[rllib]>=2.5.0
+Dynamic: requires-dist

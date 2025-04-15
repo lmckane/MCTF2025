@@ -1,6 +1,40 @@
-# MCTF2025 - Maritime Capture The Flag Simulation Environment
+# MCTF2025 - Maritime Capture The Flag Competition @ AAMAS
 
-A sophisticated simulation environment for developing and testing autonomous strategies in capture-the-flag scenarios. This project is based on the Moos-IvP-Aquaticus framework and provides a rich environment for both research and training purposes.
+A sophisticated simulation environment for developing and testing autonomous strategies in maritime capture-the-flag scenarios. This project provides the official training framework (Pyquaticus) for the 2025 Maritime Capture the Flag Competition at AAMAS.
+
+For competition details, rules, and submission guidelines, visit [mctf2025.com](https://mctf2025.com).
+
+## Competition Overview
+
+The 2025 Maritime Capture the Flag Competition @ AAMAS features:
+
+### Game Rules
+- Playing field: 160m x 80m rectangular field divided into two halves
+- Teams: Two teams (red and blue) with 3 players each
+- Home bases: 10m diameter circular areas containing team flags
+- Game duration: 10 minutes per match
+- Out-of-bounds results in automatic return to home base
+
+### Scoring System
+- Evaluation against top ten ranked teams in round-robin format
+- Score = Sum of (Flag captures - Opponent flag captures) across games
+- Tiebreaker: Number of flag grabs
+- Safety score based on collision counts
+
+### Game Events
+- **Tag**: Within 10m of opponent in own half
+- **Flag Grab**: Enter opponent's unguarded base and collect flag
+- **Flag Capture**: Return opponent's flag to home base without being tagged
+- **Auto-Tag**: Triggered when leaving field boundaries
+- **Untagging**: Return to home base to remove tagged state
+
+### Eligibility Requirements
+- Must be 18 years or older
+- Comply with OFAC sanctions regulations
+- Not listed on U.S. Statutory Debarment List
+- Federal employees/entities may participate
+- Teams must be mutually exclusive
+- One submission per team allowed
 
 ## Features
 
@@ -48,27 +82,30 @@ A sophisticated simulation environment for developing and testing autonomous str
 
 ## Installation
 
-https://mctf2025.com/installation
-
 1. Clone the repository:
-https://github.com/mit-ll-trusted-autonomy/pyquaticus/tree/main
-
-
-## Usage
-
-### Basic Environment Setup
-```python
-from pyquaticus import PyQuaticus
-
-# Create a basic 2v2 environment
-env = PyQuaticus(
-    num_agents=4,  # 2v2
-    config=get_std_config()
-)
+```bash
+git clone https://github.com/mit-ll-trusted-autonomy/pyquaticus.git
+cd pyquaticus
 ```
 
-### Training Agents
-```python
+2. Set up a virtual environment (recommended):
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+## Training Agents
+
+### Multi-Agent Reinforcement Learning with RLlib
+
+The project uses RLlib for multi-agent reinforcement learning. Training scripts are provided for both 2v2 and 3v3 scenarios:
+
+```bash
 # For 2v2 training
 python rl_test/train_2v2.py
 
@@ -76,18 +113,81 @@ python rl_test/train_2v2.py
 python rl_test/train_3v3.py
 ```
 
-### Testing
-The project includes various test scripts for different components:
-- Random environment testing: `test/rand_env_test.py`
-- GPS environment testing: `test/gps_env_test.py`
-- Dynamics testing: `test/dynamics_test.py`
-- Policy testing: `test/base_policy_test.py`
+Training checkpoints will be saved in `ray_tests/<checkpoint_num>/policies/<policy-name>`. The checkpoint frequency can be configured in the training scripts.
 
-### Manual Control
-The environment supports manual control using arrow keys:
-```bash
-python test/arrowkeys_test.py
+### Reward Function Design
+
+The environment provides a flexible reward system for training agents. Example reward functions are available in `rewards.py`, including:
+
+- Sparse rewards
+- Capture and grab rewards (`caps_and_grabs`)
+- Custom reward functions can be implemented with access to:
+  - Agent positions and movements
+  - Flag status and positions
+  - Team scores and statistics
+  - Tagging and cooldown states
+  - Environment boundaries
+  - Collision information
+  - LIDAR observations (if enabled)
+
+### Policy Mapping
+
+Agents are mapped to specific policies during training through a policy mapping function. This ensures each agent uses the correct learned policy or opponent policy during training. Example from `train_3v3.py`:
+
+```python
+def policy_mapping_fn(agent_id, episode, worker, **kwargs):
+    if agent_id == 'agent_0':
+        return "agent-0-policy"
+    if agent_id == 'agent_1':
+        return "agent-1-policy"
+    if agent_id == 'agent_2':
+        return "agent-2-policy"
+    return "random"  # Default policy for other agents
 ```
+
+### Testing and Deployment
+
+The project includes scripts for testing and deploying trained policies:
+
+```bash
+# Deploy trained 2v2 policies
+python rl_test/deploy_2v2.py path/to/policy1 path/to/policy2
+
+# Deploy trained 3v3 policies
+python rl_test/deploy_3v3.py path/to/policy1 path/to/policy2 path/to/policy3
+```
+
+Additional testing tools:
+- Manual control testing: `test/arrowkeys_test.py`
+- Dynamics testing: `test/dynamics_test.py`
+- GPS environment testing: `test/gps_env_test.py`
+- Random environment testing: `test/rand_env_test.py`
+
+## Competition Submission
+
+### Zip File Submission (Recommended for New Competitors)
+1. Navigate to `pyquaticus/rl_test/competition_info`
+2. Update observation space settings in `gen_config.py`
+3. Implement solution in `solution.py`:
+   - `__init__` method to load trained policies
+   - `compute_action` method for agent actions
+4. Create zip without nested folders:
+```bash
+zip example.zip -r policies_folder gen_config.py solution.py
+```
+
+### Docker Submission
+1. Pull base container: `docker pull jkliem/mctf2025:latest`
+2. Size limit: 0.25GB over base image size
+3. Place solution files in `working_dir` or implement custom communication
+4. Push to public DockerHub repository
+5. Submit with DockerHub details (username/name:tag)
+
+### Important Notes
+- Top scoring submissions must provide algorithm explanation for joint paper publication
+- Submissions must run on both RED and BLUE sides
+- Multiple accounts or submissions will result in disqualification
+- Competition organizers reserve right to disqualify non-compliant entries
 
 ## Configuration
 
@@ -109,4 +209,14 @@ The software/firmware is provided to you on an As-Is basis.
 Delivered to the U.S. Government with Unlimited Rights, as defined in DFARS Part 252.227-7013 or 7014 (Feb 2014). Notwithstanding any copyright notice, U.S. Government rights in this work are defined by DFARS 252.227-7013 or DFARS 252.227-7014 as detailed above. Use of this work other than as specifically authorized by the U.S. Government may violate any copyrights that exist in this work.
 
 SPDX-License-Identifier: BSD-3-Clause 
+
+## Results and Recognition
+
+- Results displayed on MCTF website leaderboard
+- Winners announced at AAMAS conference
+- Top performers receive unofficial certificates
+- No monetary or non-monetary prizes awarded
+- Top submissions contribute to joint research paper
+
+Note: This competition is organized by U.S. Naval Research Laboratory, United States Military Academy, and MIT Lincoln Labs, but participation does not create any procurement obligations.
 

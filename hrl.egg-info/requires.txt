@@ -1,0 +1,5 @@
+numpy
+matplotlib
+gymnasium
+pyquaticus
+ray[rllib]>=2.5.0
