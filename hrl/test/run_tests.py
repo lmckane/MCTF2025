@@ -12,36 +12,13 @@ from hrl.utils.reward_shaping import RewardShaper
 from hrl.utils.state_processor import StateProcessor
 from hrl.utils.experience_buffer import ExperienceBuffer
 from hrl.utils.option_termination import OptionTermination
-from hrl.utils.option_initiation import OptionInitiation
-from hrl.utils.option_transition import OptionTransition
-from hrl.utils.option_reward import OptionReward
 from hrl.utils.option_learning import OptionLearner
-from hrl.utils.option_optimization import OptionOptimizer
-from hrl.utils.option_evaluation import OptionEvaluator
 from hrl.utils.option_selection import OptionSelector
 from hrl.utils.option_execution import OptionExecutor
-from hrl.utils.option_monitoring import OptionMonitor
-from hrl.utils.option_adaptation import OptionAdapter
-from hrl.utils.option_coordination import OptionCoordinator
-from hrl.utils.option_communication import OptionCommunicator
-from hrl.utils.option_planning import OptionPlanner
-from hrl.utils.option_memory import OptionMemory
-from hrl.utils.option_attention import OptionAttention
-from hrl.utils.option_curiosity import OptionCuriosity
-from hrl.utils.option_exploration import OptionExplorer
-from hrl.utils.option_meta_learning import OptionMetaLearner
-from hrl.utils.option_transfer import OptionTransfer
-from hrl.utils.option_robustness import OptionRobustness
-from hrl.utils.option_safety import OptionSafety
-from hrl.utils.option_efficiency import OptionEfficiency
-from hrl.utils.option_scalability import OptionScalability
-from hrl.utils.option_interpretability import OptionInterpretability
-from hrl.utils.option_debugging import OptionDebugger
-from hrl.utils.option_logging import OptionLogger
-from hrl.utils.option_visualization import OptionVisualizer
-from hrl.utils.option_analysis import OptionAnalyzer
 from pyquaticus.envs.rllib_pettingzoo_wrapper import ParallelPettingZooWrapper
 from pyquaticus import pyquaticus_v0
+from ray.tune.registry import register_env
+from ray.rllib.algorithms.ppo import PPOConfig
 
 def main():
     # Environment configuration
@@ -76,20 +53,33 @@ def main():
     }
     
     # Initialize environment with wrapper
-    env = ParallelPettingZooWrapper(pyquaticus_v0.PyQuaticusEnv(
+    env_creator = lambda con: pyquaticus_v0.PyQuaticusEnv(
         render_mode="human" if config["render"] else None,
         team_size=config["env_config"]["team_size"],
         config_dict=config["env_config"]["config_dict"]
-    ))
+    )
+    
+    # Register environment
+    register_env("pyquaticus", lambda config: ParallelPettingZooWrapper(env_creator(config)))
+    
+    # Create wrapped environment
+    env = ParallelPettingZooWrapper(env_creator(config))
     
     # Get observation and action spaces
     obs_space = env.observation_space["agent_0"]
     act_space = env.action_space["agent_0"]
     
-    # Add spaces to policy config
+    # Define policy mapping function
+    def policy_mapping_fn(agent_id, episode, worker, **kwargs):
+        return "default_policy"
+    
+    # Define policies
+    policies = {
+        "default_policy": (None, obs_space, act_space, {})
+    }
+    
+    # Add spaces and multi-agent config to policy config
     config["policy_config"] = {
-        "observation_space": obs_space,
-        "action_space": act_space,
         "train_batch_size": 4000,
         "num_sgd_iter": 10,
         "lr": 3e-4,
@@ -101,6 +91,25 @@ def main():
             "fcnet_activation": "tanh"
         }
     }
+    
+    # Initialize PPO config
+    ppo_config = PPOConfig().api_stack(
+        enable_rl_module_and_learner=False,
+        enable_env_runner_and_connector_v2=False
+    ).environment(env="pyquaticus").env_runners(
+        num_env_runners=1,
+        num_cpus_per_env_runner=0.25
+    )
+    
+    # Add multi-agent configuration
+    ppo_config.multi_agent(
+        policies=policies,
+        policy_mapping_fn=policy_mapping_fn,
+        policies_to_train=["default_policy"]
+    )
+    
+    # Build the algorithm
+    algo = ppo_config.build_algo()
     
     # Initialize evaluator and visualizer
     evaluator = HRLEvaluator(config)
@@ -126,35 +135,10 @@ def main():
     state_processor = StateProcessor(config)
     experience_buffer = ExperienceBuffer(config)
     option_termination = OptionTermination(config)
-    option_initiation = OptionInitiation(config)
-    option_transition = OptionTransition(config)
-    option_reward = OptionReward(config)
     option_learner = OptionLearner(config)
-    option_optimizer = OptionOptimizer(config)
-    option_evaluator = OptionEvaluator(config)
     option_selector = OptionSelector(config)
     option_executor = OptionExecutor(config)
-    option_monitor = OptionMonitor(config)
-    option_adapter = OptionAdapter(config)
-    option_coordinator = OptionCoordinator(config)
-    option_communicator = OptionCommunicator(config)
-    option_planner = OptionPlanner(config)
-    option_memory = OptionMemory(config)
-    option_attention = OptionAttention(config)
-    option_curiosity = OptionCuriosity(config)
-    option_explorer = OptionExplorer(config)
-    option_meta_learner = OptionMetaLearner(config)
-    option_transfer = OptionTransfer(config)
-    option_robustness = OptionRobustness(config)
-    option_safety = OptionSafety(config)
-    option_efficiency = OptionEfficiency(config)
-    option_scalability = OptionScalability(config)
-    option_interpretability = OptionInterpretability(config)
-    option_debugger = OptionDebugger(config)
-    option_logger = OptionLogger(config)
-    option_visualizer = OptionVisualizer(config)
-    option_analyzer = OptionAnalyzer(config)
-    
+        
     # Test individual options
     print("Testing individual options...")
     for option_name, option in options.items():
@@ -176,16 +160,6 @@ def main():
     print("\nGenerating trajectory and heatmap plots...")
     visualizer.plot_trajectory(states)
     visualizer.plot_heatmap()
-    
-    # Analyze option performance
-    print("\nAnalyzing option performance...")
-    option_analyzer.analyze_performance(evaluator.metrics)
-    
-    # Log results
-    option_logger.log_metrics(evaluator.metrics)
-    
-    # Debug any issues
-    option_debugger.check_for_issues(evaluator.metrics)
 
 if __name__ == "__main__":
     main() 
