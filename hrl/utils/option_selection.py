@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 import numpy as np
 from hrl.utils.option_evaluation import OptionEvaluator
+from hrl.utils.metrics_tracker import MetricsTracker
 
 class OptionSelector:
     """Selects the most appropriate option for the current state."""
@@ -82,4 +83,39 @@ class OptionSelector:
     def update_exploration_rate(self, episode: int, total_episodes: int):
         """Update exploration rate based on training progress."""
         # Linearly decrease exploration rate
-        self.exploration_rate = max(0.01, 1.0 - (episode / total_episodes)) 
+        self.exploration_rate = max(0.01, 1.0 - (episode / total_episodes))
+
+# Initialize metrics tracker
+metrics = MetricsTracker(config={
+    'log_dir': 'training_logs',
+    'log_interval': 100,
+    'save_replays': True
+})
+
+# In your training loop
+for episode in range(num_episodes):
+    # ... training code ...
+    
+    # Update metrics
+    metrics.update(
+        step=current_step,
+        episode=episode,
+        info={
+            'win': episode_won,
+            'score': episode_score,
+            'flag_captures': num_captures,
+            'tags': num_tags,
+            'deaths': num_deaths,
+            'option_usage': option_usage_stats,
+            'option_success': option_success_stats,
+            'episode_length': episode_length,
+            'rewards': episode_rewards,
+            'q_values': episode_q_values,
+            'advantages': episode_advantages,
+            'replay': episode_replay_data  # Optional
+        }
+    )
+    
+    # Plot metrics periodically
+    if episode % 100 == 0:
+        metrics.plot_metrics(['win_rate', 'score', 'flag_captures']) 

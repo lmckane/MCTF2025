@@ -1,0 +1,23 @@
+{
+  "step": 0,
+  "timestamp": "2025-04-21T19:38:09.540631",
+  "win_rate": 0.0,
+  "avg_score": 407.0,
+  "avg_flag_captures": 0.0,
+  "avg_tags": 0.0,
+  "avg_deaths": 0.0,
+  "avg_episode_length": 1000.0,
+  "avg_reward": 0.407,
+  "0_usage": 253.0,
+  "0_success": 0.0,
+  "4_usage": 165.0,
+  "4_success": 0.0,
+  "1_usage": 142.0,
+  "1_success": 0.0,
+  "3_usage": 143.0,
+  "3_success": 0.0,
+  "2_usage": 143.0,
+  "2_success": 0.0,
+  "5_usage": 154.0,
+  "5_success": 0.0
+}

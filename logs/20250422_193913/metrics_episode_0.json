@@ -1,0 +1,33 @@
+{
+  "episode": [
+    0
+  ],
+  "step": [],
+  "timestamp": [],
+  "win_rate": [
+    0.0
+  ],
+  "score": [],
+  "flag_captures": [],
+  "tags": [],
+  "deaths": [],
+  "option_usage": {
+    "tag": [
+      1.0
+    ]
+  },
+  "option_success": {},
+  "episode_length": [],
+  "rewards": [],
+  "q_values": [],
+  "advantages": [],
+  "avg_reward": [
+    0.0
+  ],
+  "curriculum_stage": [
+    0
+  ],
+  "stage_progress": [
+    0.0
+  ]
+}
