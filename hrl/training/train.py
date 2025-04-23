@@ -10,6 +10,9 @@ from hrl.policies.hierarchical_policy import HierarchicalPolicy
 from hrl.utils.option_selector import OptionSelector
 from hrl.utils.state_processor import StateProcessor
 from hrl.environment.game_env import GameEnvironment
+from hrl.utils.metrics import Metrics
+from hrl.utils.team_coordinator import TeamCoordinator
+from hrl.utils.opponent_modeler import OpponentModeler
 
 def create_config(args) -> Dict[str, Any]:
     """Create configuration for training."""
@@ -126,9 +129,29 @@ def main():
     # Create config
     config = create_config(args)
     
-    # Create trainer
-    print("Initializing trainer...")
-    trainer = Trainer(config)
+    # Create environment
+    env = GameEnvironment(config['env_config'])
+    
+    # Create state processor
+    state_processor = StateProcessor(config['policy_config'])
+    
+    # Create option selector
+    option_selector = OptionSelector(config['policy_config'])
+    
+    # Create team coordinator
+    team_coordinator = TeamCoordinator(config['curriculum_config']['stages'][0])
+    
+    # Create opponent modeler
+    opponent_modeler = OpponentModeler(config['curriculum_config']['stages'][0])
+    
+    # Create policy
+    policy = HierarchicalPolicy(
+        state_size=state_processor.state_size,
+        action_size=2,  # 2D movement
+        config=config['policy_config'],
+        option_selector=option_selector,
+        state_processor=state_processor
+    )
     
     # Load model if specified
     if args.load_model:
@@ -139,6 +162,15 @@ def main():
     
     # Start timer
     start_time = time.time()
+    
+    # Create metrics tracking
+    metrics = Metrics()
+    
+    # Create trainer
+    print("Initializing trainer...")
+    trainer = Trainer(env, policy, metrics, config)
+    trainer.team_coordinator = team_coordinator
+    trainer.opponent_modeler = opponent_modeler
     
     # Train
     try:

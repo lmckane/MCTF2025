@@ -195,8 +195,15 @@ class CoordinatedStrategy(OpponentStrategy):
         if not self.roles_initialized:
             self._initialize_roles(state)
             
+        # Extract agent properties
+        agent_id = agent.id if hasattr(agent, 'id') else agent['id']
+        agent_team = agent.team if hasattr(agent, 'team') else agent['team']
+        agent_position = agent.position if hasattr(agent, 'position') else np.array(agent['position'])
+        agent_has_flag = agent.has_flag if hasattr(agent, 'has_flag') else agent['has_flag']
+        agent_is_tagged = agent.is_tagged if hasattr(agent, 'is_tagged') else agent['is_tagged']
+            
         # Get role for this agent
-        role = self.roles.get(agent.id, "attacker")
+        role = self.roles.get(agent_id, "attacker")
         
         # Extract game state elements
         agents = state['agents']
@@ -204,60 +211,80 @@ class CoordinatedStrategy(OpponentStrategy):
         team_bases = state['team_bases']
         
         # If agent is tagged, we can't move
-        if agent.is_tagged:
+        if agent_is_tagged:
             return np.zeros(2)
             
         # Defender behavior
         if role == "defender":
             # Get our team's flag and base
-            our_flag = next((flag for flag in flags if flag.team == agent.team), None)
-            base_pos = team_bases[agent.team]
+            our_flag = next((f for f in flags if (hasattr(f, 'team') and f.team == agent_team) or 
+                             (isinstance(f, dict) and f['team'] == agent_team)), None)
+            base_pos = team_bases[agent_team]
             
-            if our_flag and our_flag.is_captured:
+            our_flag_is_captured = our_flag.is_captured if hasattr(our_flag, 'is_captured') else our_flag['is_captured']
+            our_flag_carrier_id = our_flag.carrier_id if hasattr(our_flag, 'carrier_id') else our_flag.get('carrier_id')
+            
+            if our_flag and our_flag_is_captured:
                 # Chase the carrier
-                carrier = next((a for a in agents if a.id == our_flag.carrier_id), None)
+                carrier = next((a for a in agents if (hasattr(a, 'id') and a.id == our_flag_carrier_id) or 
+                                (isinstance(a, dict) and a['id'] == our_flag_carrier_id)), None)
                 if carrier:
-                    direction = carrier.position - agent.position
+                    carrier_position = carrier.position if hasattr(carrier, 'position') else np.array(carrier['position'])
+                    direction = carrier_position - agent_position
                 else:
                     # Patrol base
-                    angle = (agent.id * 2.5) % (2*np.pi)  # Different angle for each defender
+                    angle = (agent_id * 2.5) % (2*np.pi)  # Different angle for each defender
                     patrol_radius = 15
                     patrol_point = base_pos + np.array([patrol_radius*np.cos(angle), patrol_radius*np.sin(angle)])
-                    direction = patrol_point - agent.position
+                    direction = patrol_point - agent_position
             else:
                 # Patrol base
-                angle = (agent.id * 2.5) % (2*np.pi)  # Different angle for each defender
+                angle = (agent_id * 2.5) % (2*np.pi)  # Different angle for each defender
                 patrol_radius = 15
                 patrol_point = base_pos + np.array([patrol_radius*np.cos(angle), patrol_radius*np.sin(angle)])
-                direction = patrol_point - agent.position
+                direction = patrol_point - agent_position
                 
         # Attacker behavior
         elif role == "attacker":
-            if agent.has_flag:
+            if agent_has_flag:
                 # Return to base with flag
-                base_pos = team_bases[agent.team]
-                direction = base_pos - agent.position
+                base_pos = team_bases[agent_team]
+                direction = base_pos - agent_position
             else:
                 # Go for enemy flags
-                enemy_flags = [flag for flag in flags if flag.team != agent.team and not flag.is_captured]
+                enemy_flags = [f for f in flags if ((hasattr(f, 'team') and f.team != agent_team) or 
+                                                    (isinstance(f, dict) and f['team'] != agent_team)) and
+                                                   ((hasattr(f, 'is_captured') and not f.is_captured) or 
+                                                    (isinstance(f, dict) and not f['is_captured']))]
                 if enemy_flags:
                     # Assign different flags to different attackers if multiple flags
                     if len(enemy_flags) > 1:
-                        flag_index = agent.id % len(enemy_flags)
+                        flag_index = agent_id % len(enemy_flags)
                         target_flag = enemy_flags[flag_index]
                     else:
                         target_flag = enemy_flags[0]
-                    direction = target_flag.position - agent.position
+                        
+                    flag_position = target_flag.position if hasattr(target_flag, 'position') else np.array(target_flag['position'])
+                    direction = flag_position - agent_position
                 else:
                     # Hunt enemy players
-                    enemy_agents = [a for a in agents if a.team != agent.team and not a.is_tagged]
+                    enemy_agents = [a for a in agents if ((hasattr(a, 'team') and a.team != agent_team) or 
+                                                          (isinstance(a, dict) and a['team'] != agent_team)) and
+                                                         ((hasattr(a, 'is_tagged') and not a.is_tagged) or 
+                                                          (isinstance(a, dict) and not a['is_tagged']))]
                     if enemy_agents:
-                        closest_enemy = min(enemy_agents, key=lambda a: np.linalg.norm(agent.position - a.position))
-                        direction = closest_enemy.position - agent.position
+                        # Find closest enemy agent
+                        def get_distance(a):
+                            a_pos = a.position if hasattr(a, 'position') else np.array(a['position'])
+                            return np.linalg.norm(agent_position - a_pos)
+                        
+                        closest_enemy = min(enemy_agents, key=get_distance)
+                        enemy_position = closest_enemy.position if hasattr(closest_enemy, 'position') else np.array(closest_enemy['position'])
+                        direction = enemy_position - agent_position
                     else:
                         # Return to base
-                        base_pos = team_bases[agent.team]
-                        direction = base_pos - agent.position
+                        base_pos = team_bases[agent_team]
+                        direction = base_pos - agent_position
                         
         # Normalize direction
         norm = np.linalg.norm(direction)
@@ -277,23 +304,27 @@ class CoordinatedStrategy(OpponentStrategy):
         
         # Group agents by team
         for agent in agents:
-            if agent.team not in team_agents:
-                team_agents[agent.team] = []
-            team_agents[agent.team].append(agent)
+            # Handle both Agent objects and dictionary representations
+            team = agent['team'] if isinstance(agent, dict) else agent.team
+            agent_id = agent['id'] if isinstance(agent, dict) else agent.id
+            
+            if team not in team_agents:
+                team_agents[team] = []
+            team_agents[team].append({'agent': agent, 'id': agent_id})
             
         # Assign roles within each team
-        for team, agents in team_agents.items():
-            if len(agents) >= 3:
+        for team, team_agents_list in team_agents.items():
+            if len(team_agents_list) >= 3:
                 # 1 defender, 2 attackers for 3+ agents
-                for i, agent in enumerate(agents):
+                for i, agent_data in enumerate(team_agents_list):
                     if i == 0:
-                        self.roles[agent.id] = "defender"
+                        self.roles[agent_data['id']] = "defender"
                     else:
-                        self.roles[agent.id] = "attacker"
+                        self.roles[agent_data['id']] = "attacker"
             else:
                 # All attackers for small teams
-                for agent in agents:
-                    self.roles[agent.id] = "attacker"
+                for agent_data in team_agents_list:
+                    self.roles[agent_data['id']] = "attacker"
                     
         self.roles_initialized = True
 

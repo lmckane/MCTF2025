@@ -101,9 +101,15 @@ def run_episode(policy, option_selector, state_processor, env_config, opponent_s
         next_state, reward, done, info = env.step(action)
         
         # Override opponent actions
-        for agent in env.agents:
+        for i, agent in enumerate(env.agents):
             if agent.team == 1:  # Opponent team
-                opponent_action = opponent_strategy.get_action(agent, state)
+                # Create a copy of the state with agent IDs for the opponent strategy
+                agent_state = state.copy()
+                for j, agent_data in enumerate(agent_state['agents']):
+                    if 'id' not in agent_data:
+                        agent_data['id'] = j
+                
+                opponent_action = opponent_strategy.get_action(agent, agent_state)
                 agent.velocity = opponent_action * env.max_velocity
                 agent.position += agent.velocity
                 agent.position = np.clip(agent.position, 0, env.map_size - 1)

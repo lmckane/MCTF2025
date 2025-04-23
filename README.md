@@ -331,3 +331,164 @@ Command line arguments:
 - `--render`: Enable rendering of the environment
 - `--debug-level`: Debug output level (0=minimal, 1=normal, 2=verbose)
 
+# Hierarchical Reinforcement Learning for Capture The Flag
+
+A hierarchical reinforcement learning agent designed to excel in multi-agent capture-the-flag environments through strategic decision-making and team coordination.
+
+## Overview
+
+This project implements a hierarchical reinforcement learning (HRL) approach to the capture-the-flag domain. The agent uses a two-level hierarchy:
+1. High-level options (e.g., "capture flag", "return to base")
+2. Low-level actions (continuous movement in 2D space)
+
+The system incorporates opponent modeling, team coordination, and strategic adaptation to create a robust agent capable of competing against various opponent strategies.
+
+## Key Features
+
+- **Hierarchical Policy Structure**: Separates strategy from tactics with options and primitive actions
+- **Team Coordination**: Agents coordinate through role assignment and territory control
+- **Opponent Modeling**: Identifies opponent strategies and adapts counter-tactics
+- **Experience Replay**: Efficiently reuses past experiences for stable learning
+- **Advanced Reward Shaping**: Encourages strategic behaviors like flag capturing and team support
+- **Curriculum Learning**: Progressively increases challenge during training
+
+## Project Structure
+
+```
+hrl/
+├── environment/           # Game environment implementation
+│   └── game_env.py        # Capture-the-flag game mechanics
+├── policies/              # Agent policies
+│   └── hierarchical_policy.py  # Main policy implementation
+├── training/              # Training scripts
+│   ├── train.py           # Main training script
+│   └── trainer.py         # Training loop implementation
+├── testing/               # Testing scripts
+│   └── test_against_opponents.py  # Test against different strategies
+├── utils/                 # Utility modules
+│   ├── metrics.py         # Performance tracking
+│   ├── option_selector.py # High-level option selection
+│   ├── state_processor.py # State preprocessing
+│   ├── team_coordinator.py # Team coordination
+│   └── opponent_modeler.py # Opponent strategy modeling
+└── visualization/         # Results visualization
+    └── plot_metrics.py    # Training metrics visualization
+```
+
+## Installation
+
+### Prerequisites
+
+- Python 3.8+
+- PyTorch 1.8+
+- NumPy
+- Matplotlib
+
+### Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/hierarchical-rl-ctf.git
+cd hierarchical-rl-ctf
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Training
+
+To train a new agent:
+
+```bash
+python hrl/training/train.py [options]
+```
+
+Options:
+- `--num-episodes`: Number of episodes to train (default: 5000)
+- `--render`: Enable visualization during training
+- `--log-dir`: Directory to save logs (default: logs)
+- `--save-model`: Name for final model (default: final_model)
+- `--load-model`: Path to pre-trained model to continue training
+- `--debug-level`: Debug output level (0=minimal, 1=normal, 2=verbose)
+
+The training process uses curriculum learning with three stages of increasing difficulty:
+1. Basic: Single-opponent, limited complexity
+2. Intermediate: Multiple opponents with basic coordination
+3. Advanced: Coordinated opponents with improved strategies
+
+### Testing
+
+To test the trained agent against different opponent strategies:
+
+```bash
+python hrl/testing/test_against_opponents.py --opponent <strategy> [options]
+```
+
+Options:
+- `--model`: Path to model file (default: final_model.pth)
+- `--opponent`: Strategy to test against (random, direct, defensive, aggressive, coordinated)
+- `--difficulty`: Difficulty level 0.0-1.0 (default: 0.9)
+- `--episodes`: Number of test episodes (default: 10)
+- `--render`: Enable visualization
+- `--visualize`: Generate performance visualizations
+
+For detailed information about testing against different strategies, see [MODEL_PERFORMANCE.md](MODEL_PERFORMANCE.md).
+
+## Architecture
+
+### Hierarchical Policy
+
+The agent uses a hierarchical structure with:
+
+1. **Option Selector**: Chooses high-level options based on game state
+   - Options include: capture_flag, return_to_base, tag_enemy, defend_base, intercept
+   - Implemented as a neural network that scores available options
+
+2. **Option Policies**: Map states to low-level actions for each option
+   - Implemented as neural networks that output continuous 2D movement vectors
+   - Different networks for different strategic behaviors
+
+3. **Experience Buffer**: Stores experiences at both option and action levels
+   - Enables efficient learning through experience replay
+   - Maintains context for hierarchical learning
+
+### Team Coordination
+
+The team coordinator:
+- Assigns roles to agents (ATTACKER, DEFENDER, INTERCEPTOR)
+- Tracks territory control and flag status
+- Provides strategic recommendations based on team state
+- Adapts role distribution based on game dynamics
+
+### Opponent Modeling
+
+The opponent modeler:
+- Tracks opponent movements and behaviors
+- Classifies opponent strategies (AGGRESSIVE, DEFENSIVE, RUSHING, etc.)
+- Suggests optimal counter-strategies
+- Identifies danger zones and safe paths
+
+## Results and Performance
+
+The trained agent achieves a 75-85% win rate against random opponents and demonstrates competitive performance against more advanced strategies.
+
+For detailed performance metrics and analysis, see [MODEL_PERFORMANCE.md](MODEL_PERFORMANCE.md).
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- [PyTorch](https://pytorch.org/) - The deep learning framework used
+- [OpenAI Baselines](https://github.com/openai/baselines) - Inspiration for RL implementations
+- [MCTF Challenge](https://github.com/openai/mctf) - For the original challenge environment
+

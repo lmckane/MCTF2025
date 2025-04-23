@@ -159,84 +159,30 @@ class GameEnvironment:
         """Take a step in the environment."""
         # Update agent state
         for i, agent in enumerate(self.agents):
-            # Skip if agent is tagged
-            if agent.is_tagged:
-                continue
-                
-            # Move agent
+            # Get appropriate action for this agent
             agent_action = action if i == 0 else self._get_opponent_action(agent)
             agent_action = np.clip(agent_action, -1, 1)  # Clip to valid range
             
-            # Update position and velocity
-            agent.velocity = agent_action * self.max_velocity
-            agent.position += agent.velocity
+            # Store the action for reference
+            agent.last_action = agent_action
             
-            # Clip position to map bounds
-            agent.position = np.clip(agent.position, 0, self.map_size - 1)
+            # Only update position if not tagged
+            if not agent.is_tagged:
+                # Apply action to update position
+                self._apply_action(i, agent_action)
             
-        # Check for flag captures
-        for agent in self.agents:
-            if agent.is_tagged:
-                continue
-                
-            for flag in self.flags:
-                if flag.team != agent.team and not flag.is_captured:
-                    # Check if agent is in capture range
-                    dist = np.linalg.norm(agent.position - flag.position)
-                    if dist < self.capture_radius:
-                        flag.is_captured = True
-                        agent.has_flag = True
-                        flag.carrier_id = agent.id
-                        if self.debug_level >= 1:
-                            print(f"Flag captured by agent {agent.id} (team {agent.team})!")
-                        
-            # Check if agent with flag is at own base
-            if agent.has_flag:
-                base_pos = self.team_bases[agent.team]
-                dist = np.linalg.norm(agent.position - base_pos)
-                if dist < self.base_radius:
-                    # Score a point
-                    self.team_scores[agent.team] += 1
-                    agent.has_flag = False
-                    # Reset flags
-                    for flag in self.flags:
-                        if flag.team != agent.team:
-                            flag.is_captured = False
-                            flag.position = self.flag_positions[flag.team]
-                    if self.debug_level >= 1:
-                        print(f"Team {agent.team} scored! New score: {self.team_scores}")
-                    
-        # Check for tags
-        for agent in self.agents:
-            if agent.is_tagged:
-                continue
-                
-            for other in self.agents:
-                if other.team != agent.team and not other.is_tagged:
-                    # Check if agents are in tag range
-                    dist = np.linalg.norm(agent.position - other.position)
-                    if dist < self.tag_radius:
-                        # Tag other agent
-                        other.is_tagged = True
-                        other.tag_timer = self.tag_duration
-                        
-                        # If tagged agent had flag, drop it
-                        if other.has_flag:
-                            other.has_flag = False
-                            for flag in self.flags:
-                                if flag.team != other.team and flag.is_captured:
-                                    flag.is_captured = False
-                                    flag.position = other.position
-                        if self.debug_level >= 2:
-                            print(f"Agent {other.id} (team {other.team}) tagged by agent {agent.id}!")
-                        
-        # Update tag timers
+        # Check if agents with flags have reached their base
+        self._check_scoring()
+            
+        # Update tag timers for tagged agents
         for agent in self.agents:
             if agent.is_tagged:
                 agent.tag_timer -= 1
                 if agent.tag_timer <= 0:
                     agent.is_tagged = False
-                    agent.position = self.spawn_positions[agent.team]
+                    # Respawn at base when untagged
+                    agent.position = self.team_bases[agent.team].copy() + np.random.uniform(-5, 5, 2)
+                    agent.position = np.clip(agent.position, [0, 0], self.map_size)
                     
         # Update step count
         self.step_count += 1
@@ -282,59 +228,188 @@ class GameEnvironment:
         
         return observation, reward, done, info
         
-    def _handle_tagging(self):
-        """Handle agent tagging logic."""
-        for i, agent in enumerate(self.agents):
-            if agent.is_tagged:
+    def _apply_action(self, agent_idx: int, action: np.ndarray):
+        """
+        Apply action to update agent position and handle collisions
+        
+        Args:
+            agent_idx: Index of the agent
+            action: Action to apply (normalized direction vector)
+        """
+        agent = self.agents[agent_idx]
+        
+        # Normalize action if needed
+        if np.linalg.norm(action) > 1.0:
+            action = action / np.linalg.norm(action)
+        
+        # Set agent velocity
+        agent.velocity = action * self.max_velocity
+        
+        # Calculate new position (slower if tagged)
+        speed = self.max_velocity * (0.5 if agent.is_tagged else 1.0)
+        new_position = agent.position + action * speed
+        
+        # Boundary check to keep agents inside the map
+        new_position = np.clip(new_position, [0, 0], self.map_size)
+        
+        # Store previous position for collision resolution
+        prev_position = agent.position.copy()
+        agent.position = new_position
+        
+        # Handle collisions with other agents
+        self._resolve_agent_collisions(agent_idx, prev_position)
+        
+        # Handle flag interactions (capture/pickup)
+        self._handle_flag_interactions(agent)
+        
+        # Update tagging state
+        self._handle_agent_tagging(agent)
+        
+    def _resolve_agent_collisions(self, agent_idx: int, prev_position: np.ndarray):
+        """
+        Resolve collisions between agents with improved physics
+        
+        Args:
+            agent_idx: Index of the agent to check
+            prev_position: Previous position of the agent before movement
+        """
+        agent = self.agents[agent_idx]
+        
+        # Early return if agent is tagged (no collision resolution needed)
+        if agent.is_tagged:
+            return
+        
+        # Define collision radius (can be agent size or a bit larger for smoother movement)
+        collision_radius = 5.0
+        
+        # Check for collisions with other agents
+        for other_idx, other_agent in enumerate(self.agents):
+            if agent_idx == other_idx:  # Skip self
                 continue
                 
-            for j, other in enumerate(self.agents):
-                if other.team == agent.team or other.is_tagged:
-                    continue
-                    
-                dist = np.linalg.norm(agent.position - other.position)
-                if dist <= self.tag_radius:
-                    other.is_tagged = True
-                    if other.has_flag:
-                        # Drop flag if tagged while carrying it
-                        for flag in self.flags:
-                            if flag.carrier_id == j:
-                                flag.is_captured = False
-                                flag.carrier_id = None
-                                other.has_flag = False
-                                
-    def _handle_flag_captures(self):
-        """Handle flag capture logic."""
-        for flag in self.flags:
-            if flag.is_captured:
-                continue
-                
-            for i, agent in enumerate(self.agents):
-                if agent.team == flag.team or agent.is_tagged:
-                    continue
-                    
-                dist = np.linalg.norm(agent.position - flag.position)
-                if dist <= self.capture_radius:
-                    flag.is_captured = True
-                    flag.carrier_id = i
-                    agent.has_flag = True
-                    
-    def _check_game_over(self) -> bool:
-        """Check if the game is over."""
-        # Check step limit
-        if self.step_count >= self.max_steps:
-            self.game_state = GameState.DRAW
-            return True
+            # Calculate distance between agents
+            distance = np.linalg.norm(agent.position - other_agent.position)
             
-        # Check if any team has captured the opponent's flag
-        for flag in self.flags:
-            if flag.is_captured:
-                carrier = self.agents[flag.carrier_id]
-                if carrier.team != flag.team:  # Captured opponent's flag
-                    self.game_state = GameState.WON if carrier.team == 0 else GameState.LOST
-                    return True
+            # Check if collision occurred
+            if distance < collision_radius * 2:  # Collision detected
+                # Calculate collision response direction
+                collision_dir = agent.position - other_agent.position
+                
+                # Avoid division by zero
+                if np.linalg.norm(collision_dir) > 0:
+                    collision_dir = collision_dir / np.linalg.norm(collision_dir)
+                else:
+                    # Agents at exact same position - push in random direction
+                    angle = np.random.uniform(0, 2 * np.pi)
+                    collision_dir = np.array([np.cos(angle), np.sin(angle)])
+                
+                # Calculate push strength based on overlap
+                overlap = collision_radius * 2 - distance
+                push_strength = max(0, overlap) * 0.5  # Scale factor to avoid excessive pushback
+                
+                # Move the current agent away from collision
+                agent.position += collision_dir * push_strength
+                
+                # Ensure agent stays within map boundaries
+                agent.position = np.clip(agent.position, [0, 0], self.map_size)
+        
+    def _handle_flag_interactions(self, agent):
+        """
+        Handle flag capture and drop logic
+        
+        Args:
+            agent: The agent to check for flag interactions
+        """
+        # Skip if agent is tagged
+        if agent.is_tagged:
+            return
+            
+        # Check for flag pickup
+        if not agent.has_flag:
+            for flag in self.flags:
+                if flag.team != agent.team and not flag.is_captured:
+                    # Calculate distance to flag
+                    distance = np.linalg.norm(agent.position - flag.position)
                     
-        return False
+                    # Check if agent can capture the flag
+                    if distance < self.capture_radius:
+                        flag.is_captured = True
+                        flag.carrier_id = agent.id
+                        agent.has_flag = True
+                        if self.debug_level >= 1:
+                            print(f"Flag captured by agent {agent.id} (team {agent.team})!")
+                        break
+    
+    def _handle_agent_tagging(self, agent):
+        """
+        Handle agent tagging mechanics
+        
+        Args:
+            agent: The agent to check for tagging interactions
+        """
+        # Skip if agent is tagged or has tag immunity
+        if agent.is_tagged or agent.tag_timer < 0:
+            return
+            
+        # Check for tagging opponents
+        for other_agent in self.agents:
+            # Skip self, tagged agents, and teammates
+            if other_agent.id == agent.id or other_agent.is_tagged or other_agent.team == agent.team:
+                continue
+                
+            # Calculate distance between agents
+            distance = np.linalg.norm(agent.position - other_agent.position)
+            
+            # Check if within tagging range
+            if distance < self.tag_radius:
+                # Tag the other agent
+                other_agent.is_tagged = True
+                other_agent.tag_timer = self.tag_duration
+                
+                # If tagged agent had flag, drop it
+                if other_agent.has_flag:
+                    other_agent.has_flag = False
+                    for flag in self.flags:
+                        if flag.team != other_agent.team and flag.carrier_id == other_agent.id:
+                            flag.is_captured = False
+                            flag.carrier_id = None
+                            flag.position = other_agent.position.copy()
+                            
+                # Update metrics
+                if agent.team == 0:
+                    # Increment tagging metric for player team
+                    if hasattr(self, 'metrics'):
+                        if 'tags_by_team_0' in self.metrics:
+                            self.metrics['tags_by_team_0'] += 1
+                
+                if self.debug_level >= 2:
+                    print(f"Agent {other_agent.id} (team {other_agent.team}) tagged by agent {agent.id}!")
+                    
+    def _check_scoring(self):
+        """Check if agents with flags have reached their base to score."""
+        for agent in self.agents:
+            # Skip if agent doesn't have flag or is tagged
+            if not agent.has_flag or agent.is_tagged:
+                continue
+                
+            # Check if agent is at their base
+            base_pos = self.team_bases[agent.team]
+            dist = np.linalg.norm(agent.position - base_pos)
+            
+            if dist < self.base_radius:
+                # Score a point
+                self.team_scores[agent.team] += 1
+                agent.has_flag = False
+                
+                # Reset the captured flag
+                for flag in self.flags:
+                    if flag.team != agent.team and flag.carrier_id == agent.id:
+                        flag.is_captured = False
+                        flag.carrier_id = None
+                        flag.position = self.flag_positions[flag.team].copy()
+                        
+                if self.debug_level >= 1:
+                    print(f"Team {agent.team} scored! New score: {self.team_scores}")
         
     def _calculate_reward(self, agent) -> float:
         """Calculate rewards for the current state."""
