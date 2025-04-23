@@ -220,3 +220,114 @@ SPDX-License-Identifier: BSD-3-Clause
 
 Note: This competition is organized by U.S. Naval Research Laboratory, United States Military Academy, and MIT Lincoln Labs, but participation does not create any procurement obligations.
 
+# MCTF2025 - Capture The Flag RL Training
+
+This repository contains a hierarchical reinforcement learning implementation for playing capture-the-flag games.
+
+## Project Structure
+
+```
+hrl/
+├── checkpoints/     # Saved model checkpoints 
+├── environment/     # Game environment implementation
+├── policies/        # Hierarchical policy implementation
+├── tests/           # Test scripts
+├── training/        # Training scripts
+├── utils/           # Utility functions and classes
+└── visualization/   # Visualization tools
+```
+
+## Quick Start
+
+### Training in the Terminal
+
+To train the agent with default settings:
+
+```bash
+python hrl/training/train.py
+```
+
+For quieter output with minimal logging:
+
+```bash
+python train_quiet.py --episodes 5000
+```
+
+### Training Parameters
+
+The training script supports several command-line arguments:
+
+- `--num-episodes`: Number of episodes to train (default: 5000)
+- `--max-steps`: Maximum steps per episode (default: 500)
+- `--num-agents`: Number of agents per team (default: 3)
+- `--debug-level`: Debug output level (0=minimal, 1=normal, 2=verbose)
+- `--log-dir`: Directory to save logs (default: logs)
+- `--checkpoint-dir`: Directory to save model checkpoints (default: hrl/checkpoints)
+- `--render`: Enable rendering during training
+- `--load-model`: Path to a model to load for continued training
+
+Example with parameters:
+
+```bash
+python hrl/training/train.py --num-episodes 10000 --debug-level 1 --log-interval 20
+```
+
+### Continuing Training
+
+To continue training from a saved checkpoint:
+
+```bash
+python hrl/training/train.py --load-model final_model
+```
+
+Or with the quiet script:
+
+```bash
+python train_quiet.py --episodes 1000 --load-model final_model
+```
+
+## Visualizing Results
+
+After training, visualize the results with:
+
+```bash
+python hrl/visualization/plot_metrics.py --log-dir logs --output-dir plots
+```
+
+This will create plots showing rewards, win rates, and other metrics over time.
+
+## Testing the Environment
+
+To test the game environment:
+
+```bash
+python hrl/tests/test_env.py
+```
+
+## Directory Structure
+
+- `hrl/checkpoints/`: Saved model checkpoints from training runs
+- `logs/`: Training logs and metrics data
+- `plots/`: Generated visualization plots
+
+## Model Files
+
+Trained models are saved with the `.pth` extension in the `hrl/checkpoints/` directory.
+By default, the final model is saved as `final_model.pth`.
+
+## Testing Trained Models
+
+You can test a trained model with the `run_test.py` script:
+
+```bash
+python run_test.py --model final_model --episodes 5 --render
+```
+
+Command line arguments:
+
+- `--model`: Name of the model to load (default: final_model)
+- `--checkpoint-dir`: Directory containing model checkpoints (default: hrl/checkpoints)
+- `--episodes`: Number of episodes to run (default: 5)
+- `--render`: Enable rendering of the environment
+- `--debug-level`: Debug output level (0=minimal, 1=normal, 2=verbose)
+

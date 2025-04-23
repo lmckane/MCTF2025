@@ -206,15 +206,19 @@ class HierarchicalPolicy:
             # Get current policy and value predictions
             policy, values = self.option_networks[option](states)
             
-            # Calculate policy loss
-            log_probs = torch.sum(policy.log_prob(actions), dim=1)
+            # Calculate policy loss - ensure consistent dimensions
+            log_probs = policy.log_prob(actions).sum(dim=1)  # Sum across action dimensions
             option_advantages = advantages[:len(option_exps)]  # Slice advantages to match batch size
             policy_loss = -(log_probs * option_advantages)
             
             # Calculate value loss
             if len(option_exps) > 1:  # Only compute value loss if we have enough samples
-                value_targets = rewards[:-1] + self.gamma * values[1:].squeeze()
-                value_loss = F.mse_loss(values[:-1].squeeze(), value_targets)
+                # Ensure consistent dimensions by using view() to reshape tensors
+                values_slice = values[:-1].view(-1)
+                # Create value targets with consistent shape
+                value_targets = (rewards[:-1] + self.gamma * values[1:].view(-1)).view(-1)
+                # Now both tensors should have same shape [batch_size-1]
+                value_loss = F.mse_loss(values_slice, value_targets)
             else:
                 # If only one sample, skip value loss
                 value_loss = torch.tensor(0.0).to(self.device)
@@ -239,16 +243,36 @@ class HierarchicalPolicy:
     def get_q_value(self, processed_state: torch.Tensor, action: np.ndarray, option: int) -> float:
         """Get Q-value for state-action pair."""
         with torch.no_grad():
+            # Make sure processed_state has batch dimension
+            if processed_state.dim() == 1:
+                processed_state = processed_state.unsqueeze(0)
+                
+            # Get value
             _, value = self.option_networks[option](processed_state)
             return value.item()
             
     def get_advantage(self, processed_state: torch.Tensor, action: np.ndarray, option: int) -> float:
         """Get advantage for state-action pair."""
         with torch.no_grad():
+            # Make sure processed_state has batch dimension
+            if processed_state.dim() == 1:
+                processed_state = processed_state.unsqueeze(0)
+                
+            # Get policy and value
             policy, value = self.option_networks[option](processed_state)
-            action_tensor = torch.FloatTensor(action).to(self.device)
-            log_prob = torch.sum(torch.log(policy.log_prob(action_tensor) + 1e-10), dim=0)
-            advantage = log_prob.exp() * (value.item() - self.get_q_value(processed_state, action, option))
+            
+            # Make sure action has correct shape
+            action_tensor = torch.tensor(action, dtype=torch.float32).to(self.device)
+            if action_tensor.dim() == 1:
+                action_tensor = action_tensor.unsqueeze(0)
+                
+            # Calculate log probability
+            log_prob = policy.log_prob(action_tensor).sum(dim=1)
+            
+            # Calculate advantage
+            q_value = self.get_q_value(processed_state, action, option)
+            advantage = log_prob.exp() * (value.item() - q_value)
+            
             return advantage.item()
             
     def state_dict(self) -> Dict[str, Any]:

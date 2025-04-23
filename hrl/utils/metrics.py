@@ -222,21 +222,46 @@ class MetricsTracker:
         serializable_metrics = {}
         for key, value in self.metrics.items():
             if isinstance(value, list):
-                if value and isinstance(value[0], np.ndarray):
-                    serializable_metrics[key] = [v.tolist() for v in value]
-                else:
-                    serializable_metrics[key] = value
+                serializable_metrics[key] = []
+                for item in value:
+                    if isinstance(item, np.ndarray):
+                        serializable_metrics[key].append(item.tolist())
+                    elif isinstance(item, (np.int32, np.int64, np.float32, np.float64)):
+                        serializable_metrics[key].append(float(item))  # Convert to standard Python float
+                    else:
+                        serializable_metrics[key].append(item)
             elif isinstance(value, dict):
                 serializable_metrics[key] = {}
                 for k, v in value.items():
-                    if v and isinstance(v[0], np.ndarray):
-                        serializable_metrics[key][k] = [val.tolist() for val in v]
-                    else:
-                        serializable_metrics[key][k] = v
+                    if not v:
+                        serializable_metrics[key][k] = []
+                        continue
+                        
+                    serializable_metrics[key][k] = []
+                    for item in v:
+                        if isinstance(item, np.ndarray):
+                            serializable_metrics[key][k].append(item.tolist())
+                        elif isinstance(item, (np.int32, np.int64, np.float32, np.float64)):
+                            serializable_metrics[key][k].append(float(item))  # Convert to standard Python float
+                        else:
+                            serializable_metrics[key][k].append(item)
+            else:
+                # Handle individual numpy values
+                if isinstance(value, (np.int32, np.int64, np.float32, np.float64)):
+                    serializable_metrics[key] = float(value)
+                else:
+                    serializable_metrics[key] = value
                         
         # Save to file
-        with open(filepath, 'w') as f:
-            json.dump(serializable_metrics, f, indent=2)
+        try:
+            with open(filepath, 'w') as f:
+                json.dump(serializable_metrics, f, indent=2)
+        except TypeError as e:
+            print(f"Error saving metrics: {e}")
+            # Try a more aggressive conversion by converting the whole thing to str then back to basic types
+            with open(filepath, 'w') as f:
+                simple_metrics = {k: str(v) for k, v in serializable_metrics.items()}
+                json.dump(simple_metrics, f, indent=2)
             
     def plot_metrics(self, metrics: List[str] = None):
         """

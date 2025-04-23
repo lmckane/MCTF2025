@@ -16,6 +16,7 @@ class OptionSelector:
         self.num_options = len(config['options'])
         self.hidden_size = config.get('hidden_size', 128)
         self.learning_rate = config.get('learning_rate', 1e-4)
+        self.debug_level = config.get('debug_level', 1)  # Default to minimal debugging
         
         # Initialize network
         self.network = nn.Sequential(
@@ -34,49 +35,93 @@ class OptionSelector:
         
     def select_option(self, state: ProcessedState) -> str:
         """Select an option based on state."""
-        # Convert state to tensor
-        state_tensor = torch.tensor([
-            state.agent_positions[0][0], state.agent_positions[0][1],
-            state.agent_velocities[0][0], state.agent_velocities[0][1],
-            state.agent_flags[0],
-            state.agent_tags[0],
-            state.agent_health[0],
-            state.agent_teams[0]
-        ], dtype=torch.float32).unsqueeze(0)
-        
-        # Get option scores
-        option_scores = self.network(state_tensor)
-        
-        # Apply option weights
-        weighted_scores = option_scores * torch.tensor([self.option_weights[option] for option in self.config['options']])
-        
-        # Select option with highest score
-        option_idx = torch.argmax(weighted_scores).item()
-        return self.config['options'][option_idx]
+        try:
+            # Basic defensive check - use first agent (controlled agent) data
+            if not hasattr(state, 'agent_positions') or len(state.agent_positions) == 0:
+                if self.debug_level >= 1:
+                    print("Warning: State missing agent_positions, using default option")
+                return self.config['options'][0]  # Default to first option
+                
+            # Convert state to tensor
+            state_tensor = torch.tensor([
+                state.agent_positions[0][0], state.agent_positions[0][1],
+                state.agent_velocities[0][0], state.agent_velocities[0][1],
+                float(state.agent_flags[0]),
+                float(state.agent_tags[0]),
+                state.agent_health[0],
+                float(state.agent_teams[0])
+            ], dtype=torch.float32).unsqueeze(0)
+            
+            # Get option scores
+            option_scores = self.network(state_tensor)
+            
+            # Apply option weights
+            option_weights_tensor = torch.tensor([self.option_weights[option] for option in self.config['options']])
+            weighted_scores = option_scores * option_weights_tensor
+            
+            # Print debug info (very rarely)
+            if self.debug_level >= 2 and np.random.random() < 0.001:  # Reduced from 1% to 0.1%
+                print("\nOption Selection Debug:")
+                print(f"  State: pos={state.agent_positions[0]}, vel={state.agent_velocities[0]}, flag={state.agent_flags[0]}, tag={state.agent_tags[0]}")
+                print("  Option scores:")
+                for i, option in enumerate(self.config['options']):
+                    print(f"    {option}: score={option_scores[0][i].item():.2f}, weight={self.option_weights[option]:.2f}, weighted={weighted_scores[0][i].item():.2f}")
+            
+            # Select option with highest score
+            option_idx = torch.argmax(weighted_scores).item()
+            selected_option = self.config['options'][option_idx]
+            
+            return selected_option
+        except Exception as e:
+            if self.debug_level >= 1:
+                print(f"Error in select_option: {e}")
+            return self.config['options'][0]  # Default to first option if error occurs
         
     def update_weights(self, experiences: List[Experience]):
         """Update option weights based on experiences."""
-        for exp in experiences:
-            # Get option score
-            state_tensor = torch.tensor([
-                exp.processed_state.agent_positions[0][0], exp.processed_state.agent_positions[0][1],
-                exp.processed_state.agent_velocities[0][0], exp.processed_state.agent_velocities[0][1],
-                exp.processed_state.agent_flags[0],
-                exp.processed_state.agent_tags[0],
-                exp.processed_state.agent_health[0],
-                exp.processed_state.agent_teams[0]
-            ], dtype=torch.float32).unsqueeze(0)
+        if not experiences:
+            return
             
-            option_scores = self.network(state_tensor)
-            option_idx = self.config['options'].index(exp.option)
+        try:
+            option_rewards = {}
+            option_counts = {}
             
-            # Update weight based on reward
-            self.option_weights[exp.option] += exp.reward * 0.01  # Small learning rate
+            # Calculate average reward for each option
+            for exp in experiences:
+                if not hasattr(exp, 'option') or not hasattr(exp, 'reward'):
+                    continue
+                    
+                option = exp.option
+                if option not in option_rewards:
+                    option_rewards[option] = 0.0
+                    option_counts[option] = 0
+                    
+                option_rewards[option] += exp.reward
+                option_counts[option] += 1
+            
+            # Update weights based on average rewards
+            for option, reward in option_rewards.items():
+                if option_counts[option] > 0:
+                    avg_reward = reward / option_counts[option]
+                    # Use a small learning rate and ensure reward is having an impact
+                    update_factor = 1.0 + avg_reward * 0.01  # Small learning rate
+                    self.option_weights[option] *= update_factor
             
             # Normalize weights
             total_weight = sum(self.option_weights.values())
-            for option in self.option_weights:
-                self.option_weights[option] /= total_weight
+            if total_weight > 0:  # Avoid division by zero
+                for option in self.option_weights:
+                    self.option_weights[option] /= total_weight
+                    
+            # Occasionally print weights for debugging (reduced frequency)
+            if self.debug_level >= 2 and np.random.random() < 0.001:  # Reduced from 1% to 0.1%
+                print("\nOption weights updated:")
+                for option, weight in self.option_weights.items():
+                    print(f"  {option}: {weight:.4f}")
+                    
+        except Exception as e:
+            if self.debug_level >= 1:
+                print(f"Error in update_weights: {e}")
         
     def process_state(self, state: ProcessedState) -> torch.Tensor:
         """Convert processed state to tensor."""
@@ -138,11 +183,14 @@ class OptionSelector:
         return {
             'network': self.network.state_dict(),
             'option_weights': self.option_weights,
-            'config': self.config
+            'config': self.config,
+            'debug_level': self.debug_level
         }
         
     def load_state_dict(self, state_dict: Dict[str, Any]):
         """Load state from dictionary."""
         self.network.load_state_dict(state_dict['network'])
         self.option_weights = state_dict['option_weights']
-        self.config = state_dict['config'] 
+        self.config = state_dict['config']
+        if 'debug_level' in state_dict:
+            self.debug_level = state_dict['debug_level'] 

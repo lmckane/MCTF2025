@@ -7,6 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import os
 import random
+import time
 
 from hrl.utils.metrics import MetricsTracker
 from hrl.policies.hierarchical_policy import HierarchicalPolicy, Experience
@@ -53,6 +54,13 @@ class Trainer:
         self.log_interval = self.training_config.get('log_interval', 100)
         self.checkpoint_interval = self.training_config.get('checkpoint_interval', 1000)
         self.render = self.training_config.get('render', False)
+        self.debug_level = self.training_config.get('debug_level', 1)
+        
+        # Performance tracking
+        self.episode_rewards = []
+        self.episode_lengths = []
+        self.episode_wins = []
+        self.episode_scores = []
         
         # Curriculum parameters
         self.curriculum_stages = self.curriculum_config.get('stages', [
@@ -78,8 +86,18 @@ class Trainer:
         
     def train(self):
         """Run training loop."""
+        print(f"\n{'='*80}")
+        print(f"Starting training with {self.num_episodes} episodes")
+        print(f"{'='*80}")
+        
+        total_episodes = 0
+        start_time = time.time()
+        
         for stage in range(3):  # Basic, intermediate, advanced
-            print(f"\nStarting training stage {stage + 1}")
+            print(f"\n{'-'*60}")
+            print(f"Starting training stage {stage + 1}: {self.curriculum_stages[stage]['name']}")
+            print(f"Difficulty: {self.curriculum_stages[stage]['difficulty']}")
+            print(f"{'-'*60}")
             
             # Update curriculum stage
             self.current_stage = stage
@@ -90,19 +108,42 @@ class Trainer:
             episodes_in_stage = int(self.num_episodes * stage_duration)
             
             for episode in range(episodes_in_stage):
+                total_episodes += 1
+                
                 # Create environment for this episode
                 env = self._create_environment()
+                env.debug_level = max(0, self.debug_level - 1)  # Reduce env verbosity
                 
                 # Run episode
+                episode_start = time.time()
                 experiences = self._run_episode(env)
+                episode_time = time.time() - episode_start
                 
                 # Update policy
                 self._update_policy(experiences)
                 
+                # Track episode performance
+                total_reward = sum(exp.reward for exp in experiences)
+                self.episode_rewards.append(total_reward)
+                self.episode_lengths.append(len(experiences))
+                
+                # Track win/loss
+                game_state = experiences[-1].state.get('game_state', GameState.PLAYING)
+                win = 1.0 if game_state == GameState.WON else 0.0
+                self.episode_wins.append(win)
+                
+                # Track team scores
+                if 'agents' in experiences[-1].state:
+                    self.episode_scores.append(env.team_scores[0])
+                
                 # Log metrics
-                if episode % self.log_interval == 0:
-                    self._log_metrics(episode)
-                    
+                if episode % self.log_interval == 0 or episode == episodes_in_stage - 1:
+                    self._log_detailed_metrics(episode, total_episodes, stage, episode_time)
+                
+                # Print progress
+                if episode % max(1, episodes_in_stage // 100) == 0:
+                    self._print_progress(episode, episodes_in_stage, total_episodes, stage)
+                
                 # Save checkpoint
                 if episode % self.checkpoint_interval == 0:
                     self.save_checkpoint(f"stage_{stage}_episode_{episode}")
@@ -113,6 +154,110 @@ class Trainer:
                     
                 # Close environment
                 env.close()
+        
+        # Training completed
+        training_time = time.time() - start_time
+        print(f"\n{'='*80}")
+        print(f"Training completed in {training_time:.2f} seconds")
+        print(f"{'='*80}")
+        
+        # Save final model and metrics
+        self.save_checkpoint(f"final_model")
+        self.metrics.save_metrics(f"{self.log_dir}/final_metrics.json")
+        
+    def _print_progress(self, episode, episodes_in_stage, total_episodes, stage):
+        """Print training progress in a concise format."""
+        # Calculate recent statistics
+        recent_rewards = self.episode_rewards[-100:]
+        recent_wins = self.episode_wins[-100:]
+        recent_scores = self.episode_scores[-100:] if self.episode_scores else [0]
+        
+        # Print progress bar and stats
+        progress = episode / episodes_in_stage * 100
+        stage_name = self.curriculum_stages[stage]['name']
+        
+        print(f"\r[Stage {stage+1}/{3}] {stage_name} "
+              f"Progress: {episode}/{episodes_in_stage} ({progress:.1f}%) "
+              f"Win Rate: {np.mean(recent_wins):.2f} "
+              f"Avg Reward: {np.mean(recent_rewards):.2f} "
+              f"Avg Score: {np.mean(recent_scores):.2f}", end="")
+              
+        # Print newline every 10 iterations for readability
+        if episode % (episodes_in_stage // 10) == 0 and episode > 0:
+            print()
+        
+        # Flush to ensure output is displayed
+        import sys
+        sys.stdout.flush()
+        
+    def _log_detailed_metrics(self, episode, total_episodes, stage, episode_time):
+        """Log detailed metrics and print summary."""
+        # Get recent metrics
+        recent_rewards = self.episode_rewards[-100:]
+        recent_wins = self.episode_wins[-100:]
+        recent_lengths = self.episode_lengths[-100:]
+        recent_scores = self.episode_scores[-100:] if self.episode_scores else [0]
+        
+        # Log to metrics tracker
+        self.metrics.log_training_metric('episode', total_episodes)
+        self.metrics.log_training_metric('stage', stage)
+        self.metrics.log_game_metric('win_rate', np.mean(recent_wins))
+        self.metrics.log_training_metric('avg_reward', np.mean(recent_rewards))
+        self.metrics.log_training_metric('episode_length', np.mean(recent_lengths))
+        self.metrics.log_game_metric('avg_score', np.mean(recent_scores))
+        
+        # Print detailed summary
+        if self.debug_level >= 1:
+            print(f"\n{'-'*80}")
+            print(f"Episode {total_episodes} Summary (Stage {stage+1})")
+            print(f"Time: {episode_time:.2f}s, Steps: {recent_lengths[-1]}")
+            print(f"Recent Stats (last 100 episodes):")
+            print(f"  Win Rate: {np.mean(recent_wins):.2f}")
+            print(f"  Avg Reward: {np.mean(recent_rewards):.2f} (min={np.min(recent_rewards):.2f}, max={np.max(recent_rewards):.2f})")
+            print(f"  Avg Score: {np.mean(recent_scores):.2f}")
+            print(f"  Avg Episode Length: {np.mean(recent_lengths):.2f}")
+            
+            # Print option usage if available
+            if hasattr(self, 'policy') and hasattr(self.policy, 'buffer'):
+                recent_batch = self.policy.buffer.sample(min(100, len(self.policy.buffer)))
+                if recent_batch:
+                    option_counts = {}
+                    for exp in recent_batch:
+                        if not hasattr(exp, 'option'):
+                            continue
+                        opt = exp.option
+                        option_counts[opt] = option_counts.get(opt, 0) + 1
+                    
+                    if option_counts:
+                        print("  Option Usage:")
+                        for opt, count in option_counts.items():
+                            usage_percent = count / len(recent_batch) * 100
+                            print(f"    {opt}: {usage_percent:.1f}%")
+            
+            print(f"{'-'*80}")
+        
+        # Save metrics
+        if episode % (self.log_interval * 5) == 0:
+            self.metrics.save_metrics(f"{self.log_dir}/metrics_episode_{total_episodes}.json")
+            
+    def _create_environment(self):
+        """Create environment with current curriculum settings."""
+        # Get current stage difficulty
+        current_stage = self.curriculum_stages[self.current_stage]
+        difficulty = current_stage['difficulty']
+        
+        # Adjust environment parameters based on difficulty
+        env_config = self.env_config.copy()
+        env_config['difficulty'] = difficulty
+        env_config['debug_level'] = self.debug_level  # Pass debug level to environment
+        
+        # Adjust parameters based on difficulty
+        env_config['num_agents'] = int(3 + difficulty * 2)  # More agents at higher difficulty
+        env_config['tag_radius'] = 5 - difficulty * 2  # Smaller tag radius at higher difficulty
+        env_config['capture_radius'] = 10 - difficulty * 3  # Smaller capture radius at higher difficulty
+        
+        # Create environment
+        return GameEnvironment(env_config)
         
     def _run_episode(self, env: GameEnvironment) -> Dict[str, Any]:
         """Run a single training episode."""
@@ -286,24 +431,6 @@ class Trainer:
                 self.stage_progress = (current_progress - (stage_progress - stage['duration'])) / stage['duration']
                 break
                 
-    def _create_environment(self):
-        """Create environment with current curriculum settings."""
-        # Get current stage difficulty
-        current_stage = self.curriculum_stages[self.current_stage]
-        difficulty = current_stage['difficulty']
-        
-        # Adjust environment parameters based on difficulty
-        env_config = self.env_config.copy()
-        env_config['difficulty'] = difficulty
-        
-        # Adjust parameters based on difficulty
-        env_config['num_agents'] = int(3 + difficulty * 2)  # More agents at higher difficulty
-        env_config['tag_radius'] = 5 - difficulty * 2  # Smaller tag radius at higher difficulty
-        env_config['capture_radius'] = 10 - difficulty * 3  # Smaller capture radius at higher difficulty
-        
-        # Create environment
-        return GameEnvironment(env_config)
-        
     def _update_adversarial_opponent(self):
         """Update the adversarial opponent policy."""
         # Check if we should update
@@ -367,6 +494,17 @@ class Trainer:
         
     def save_checkpoint(self, path: str):
         """Save training checkpoint."""
+        # Create checkpoint directory if it doesn't exist
+        checkpoint_dir = os.path.join('hrl', 'checkpoints')
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # Ensure path doesn't contain directory separators
+        filename = os.path.basename(path)
+        if not filename.endswith('.pth'):
+            filename += '.pth'
+            
+        checkpoint_path = os.path.join(checkpoint_dir, filename)
+        
         checkpoint = {
             'policy_state_dict': self.policy.state_dict(),
             'option_selector_state_dict': self.option_selector.state_dict(),
@@ -376,17 +514,43 @@ class Trainer:
             'stage_progress': self.stage_progress,
             'adversarial_steps': self.adversarial_steps
         }
-        torch.save(checkpoint, path)
+        
+        # Save with pickle_protocol=4 for better compatibility
+        torch.save(checkpoint, checkpoint_path, pickle_protocol=4)
+        
+        if self.debug_level >= 1:
+            print(f"Checkpoint saved to {checkpoint_path}")
         
     def load_checkpoint(self, path: str):
         """Load training checkpoint."""
-        checkpoint = torch.load(path)
-        self.policy.load_state_dict(checkpoint['policy_state_dict'])
-        self.option_selector.load_state_dict(checkpoint['option_selector_state_dict'])
-        self.metrics.metrics = checkpoint['metrics']
-        self.current_stage = checkpoint['current_stage']
-        self.stage_progress = checkpoint['stage_progress']
-        self.adversarial_steps = checkpoint['adversarial_steps']
+        # Check if path is a filename only or a full path
+        if os.path.dirname(path) == '':
+            # Assume it's in the checkpoints directory
+            checkpoint_path = os.path.join('hrl', 'checkpoints', path)
+            if not os.path.exists(checkpoint_path) and not checkpoint_path.endswith('.pth'):
+                checkpoint_path += '.pth'
+        else:
+            checkpoint_path = path
+            
+        if not os.path.exists(checkpoint_path):
+            print(f"Warning: Checkpoint {checkpoint_path} not found.")
+            return False
+            
+        try:
+            # Set weights_only=False to handle PyTorch 2.6 changes
+            checkpoint = torch.load(checkpoint_path, weights_only=False)
+            self.policy.load_state_dict(checkpoint['policy_state_dict'])
+            self.option_selector.load_state_dict(checkpoint['option_selector_state_dict'])
+            self.metrics.metrics = checkpoint['metrics']
+            self.current_stage = checkpoint['current_stage']
+            self.stage_progress = checkpoint['stage_progress']
+            self.adversarial_steps = checkpoint['adversarial_steps']
+            
+            print(f"Checkpoint loaded from {checkpoint_path}")
+            return True
+        except Exception as e:
+            print(f"Error loading checkpoint: {e}")
+            return False
         
     def _log_metrics(self, episode: int):
         """Log training metrics."""
@@ -414,6 +578,22 @@ class Trainer:
             self.metrics.log_training_metric('avg_reward', avg_reward)
             self.metrics.log_game_metric('win_rate', win_rate)
             
+            # Calculate additional metrics
+            action_magnitude = np.mean([np.linalg.norm(exp.action) for exp in recent_batch])
+            unique_options = len(set(exp.option for exp in recent_batch))
+            # Handle empty batches properly
+            max_reward = float('-inf')
+            min_reward = float('inf')
+            if recent_batch:
+                max_reward = max(exp.reward for exp in recent_batch)
+                min_reward = min(exp.reward for exp in recent_batch)
+            
+            # Log these additional metrics
+            self.metrics.log_training_metric('action_magnitude', action_magnitude)
+            self.metrics.log_training_metric('unique_options', unique_options)
+            self.metrics.log_training_metric('max_reward', max_reward)
+            self.metrics.log_training_metric('min_reward', min_reward)
+            
         # Log option usage
         if recent_batch:
             option_counts = {}
@@ -422,14 +602,18 @@ class Trainer:
                 option_counts[opt] = option_counts.get(opt, 0) + 1
                 
             for opt, count in option_counts.items():
+                usage_percent = count / len(recent_batch) * 100
                 self.metrics.log_option_metric(f'usage_{opt}', count / len(recent_batch))
+                # Also log this to console for visibility
+                print(f"  Option {opt}: {usage_percent:.1f}% usage")
             
         # Log curriculum progress
         self.metrics.log_training_metric('curriculum_stage', self.current_stage)
         self.metrics.log_training_metric('stage_progress', self.stage_progress)
         
-        # Print summary
-        print(f"Episode {episode}: Reward={avg_reward:.2f}, Win Rate={win_rate:.2f}, Stage={self.current_stage}")
+        # Print summary with enhanced details
+        print(f"Episode {episode}: Reward={avg_reward:.2f} (min={min_reward:.2f}, max={max_reward:.2f}), Win Rate={win_rate:.2f}, Stage={self.current_stage}")
+        print(f"  Action magnitude: {action_magnitude:.2f}, Unique options used: {unique_options}")
         
         # Save metrics
         if episode % (self.log_interval * 5) == 0:

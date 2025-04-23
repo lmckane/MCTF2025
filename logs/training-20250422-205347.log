@@ -1,0 +1,26 @@
+
+================================================================================
+Starting training with the following parameters:
+  Episodes: 100
+  Agents per team: 3
+  Max steps per episode: 500
+  Debug level: 0
+  Log directory: logs
+  Checkpoint directory: hrl\checkpoints
+================================================================================
+
+Initializing trainer...
+
+================================================================================
+Starting training with 100 episodes
+================================================================================
+
+------------------------------------------------------------
+Starting training stage 1: basic
+Difficulty: 0.2
+------------------------------------------------------------
+[Stage 1/3] basic Progress: 0/20 (0.0%) Win Rate: 0.00 Avg Reward: 230.38 Avg Score: 3.00[Stage 1/3] basic Progress: 1/20 (5.0%) Win Rate: 0.00 Avg Reward: 244.97 Avg Score: 3.00[Stage 1/3] basic Progress: 2/20 (10.0%) Win Rate: 0.00 Avg Reward: 241.51 Avg Score: 3.00
+[Stage 1/3] basic Progress: 3/20 (15.0%) Win Rate: 0.00 Avg Reward: 242.10 Avg Score: 3.00[Stage 1/3] basic Progress: 4/20 (20.0%) Win Rate: 0.00 Avg Reward: 236.98 Avg Score: 3.00
+[Stage 1/3] basic Progress: 5/20 (25.0%) Win Rate: 0.00 Avg Reward: 236.85 Avg Score: 3.00[Stage 1/3] basic Progress: 6/20 (30.0%) Win Rate: 0.00 Avg Reward: 231.79 Avg Score: 3.00
+[Stage 1/3] basic Progress: 7/20 (35.0%) Win Rate: 0.00 Avg Reward: 230.77 Avg Score: 3.00[Stage 1/3] basic Progress: 8/20 (40.0%) Win Rate: 0.00 Avg Reward: 228.41 Avg Score: 3.00
+[Stage 1/3] basic Progress: 9/20 (45.0%) Win Rate: 0.00 Avg Reward: 227.77 Avg Score: 3.00
