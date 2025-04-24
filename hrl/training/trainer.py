@@ -14,6 +14,9 @@ from hrl.policies.hierarchical_policy import HierarchicalPolicy, Experience
 from hrl.utils.option_selector import OptionSelector
 from hrl.utils.state_processor import StateProcessor, ProcessedState
 from hrl.environment.game_env import GameEnvironment, Agent, GameState
+from hrl.environment.pyquaticus_wrapper import PyquaticusWrapper
+from hrl.utils.team_coordinator import TeamCoordinator
+from hrl.utils.opponent_modeler import OpponentModeler
 
 class Trainer:
     """Handles the training process with curriculum learning and adversarial training."""
@@ -28,53 +31,89 @@ class Trainer:
                 - policy_config: Policy configuration
                 - training_config: Training parameters
                 - curriculum_config: Curriculum learning parameters
-                - adversarial_config: Adversarial training parameters
+                - self_play_config: Self-play parameters
+                - opponent_config: Opponent strategy parameters
         """
         self.config = config
         self.env_config = config['env_config']
         self.policy_config = config['policy_config']
         self.training_config = config['training_config']
         self.curriculum_config = config['curriculum_config']
-        self.adversarial_config = config['adversarial_config']
+        self.self_play_config = config.get('self_play_config', {'enabled': False})
+        self.opponent_config = config.get('opponent_config', {})
+        
+        # Initialize environment
+        self.env = GameEnvironment(self.env_config)
         
         # Initialize components
-        self.policy = HierarchicalPolicy(self.policy_config)
+        self.state_processor = StateProcessor(self.policy_config)
         self.option_selector = OptionSelector(self.policy_config)
-        self.state_processor = StateProcessor(self.env_config)
+        
+        # Ensure policy_config has the required parameters
+        self.policy_config['action_size'] = 2  # 2D movement
+        
+        self.policy = HierarchicalPolicy(
+            config=self.policy_config
+        )
+        
+        # Create team coordinator
+        self.team_coordinator = TeamCoordinator(self.curriculum_config['stages'][0])
+        
+        # Create opponent modeler
+        self.opponent_modeler = OpponentModeler({
+            'debug_level': self.training_config.get('debug_level', 1),
+            'num_opponents': self.opponent_config.get('num_opponents', 3)
+        })
+        
+        # Initialize metrics
         self.metrics = MetricsTracker(self.training_config.get('metrics_config', {}))
         
         # Training parameters
         self.num_episodes = self.training_config.get('num_episodes', 10000)
         self.max_steps = self.training_config.get('max_steps', 1000)
-        self.batch_size = self.training_config.get('batch_size', 32)
-        self.gamma = self.training_config.get('gamma', 0.99)
-        self.lambda_ = self.training_config.get('lambda', 0.95)
-        self.entropy_coef = self.training_config.get('entropy_coef', 0.01)
-        self.learning_rate = self.training_config.get('learning_rate', 0.001)
+        self.batch_size = self.training_config.get('batch_size', 64)
+        self.gamma = self.policy_config.get('gamma', 0.99)
+        self.lambda_ = self.policy_config.get('lambda_', 0.95)
+        self.entropy_coef = self.policy_config.get('entropy_coef', 0.01)
+        self.learning_rate = self.policy_config.get('learning_rate', 0.001)
         self.log_interval = self.training_config.get('log_interval', 100)
         self.checkpoint_interval = self.training_config.get('checkpoint_interval', 1000)
         self.render = self.training_config.get('render', False)
         self.debug_level = self.training_config.get('debug_level', 1)
+        
+        # Checkpoint preservation settings
+        self.max_checkpoints = self.training_config.get('max_checkpoints', 5)
         
         # Performance tracking
         self.episode_rewards = []
         self.episode_lengths = []
         self.episode_wins = []
         self.episode_scores = []
+        self.current_eval_results = {'win_rate': 0.0, 'avg_score': 0.0}
         
         # Curriculum parameters
-        self.curriculum_stages = self.curriculum_config.get('stages', [
-            {'name': 'basic', 'difficulty': 0.2, 'duration': 0.2},
-            {'name': 'intermediate', 'difficulty': 0.5, 'duration': 0.3},
-            {'name': 'advanced', 'difficulty': 0.8, 'duration': 0.5}
-        ])
+        self.curriculum_enabled = self.curriculum_config.get('enabled', True)
+        self.curriculum_stages = self.curriculum_config.get('stages', [])
         self.current_stage = 0
         self.stage_progress = 0.0
+        self.progression_metric = self.curriculum_config.get('progression_metric', 'win_rate')
+        self.progression_threshold = self.curriculum_config.get('progression_threshold', 0.6)
+        self.min_episodes_per_stage = self.curriculum_config.get('min_episodes_per_stage', 500)
         
-        # Adversarial parameters
-        self.adversarial_ratio = self.adversarial_config.get('ratio', 0.3)
-        self.adversarial_update_freq = self.adversarial_config.get('update_freq', 100)
-        self.adversarial_steps = 0
+        # Self-play parameters
+        self.self_play_enabled = self.self_play_config.get('enabled', False)
+        self.self_play_start_episode = self.self_play_config.get('start_episode', 1000)
+        self.self_play_frequency = self.self_play_config.get('frequency', 0.3)
+        self.policy_bank_size = self.self_play_config.get('policy_bank_size', 5)
+        self.policy_bank_update_freq = self.self_play_config.get('policy_bank_update_freq', 500)
+        self.policy_bank = []  # Store past versions of the policy
+        
+        # Early stopping
+        self.eval_interval = self.training_config.get('eval_interval', 100)
+        self.early_stopping_patience = self.training_config.get('early_stopping_patience', 20)
+        self.best_performance = 0.0
+        self.patience_counter = 0
+        self.early_stopping_triggered = False
         
         # Create log directory
         self.log_dir = os.path.join(
@@ -84,34 +123,88 @@ class Trainer:
         os.makedirs(self.log_dir, exist_ok=True)
         self.writer = SummaryWriter(self.log_dir)
         
+        # Create checkpoint directory
+        self.checkpoint_dir = self.training_config.get('checkpoint_dir', 'checkpoints')
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        
+        # Adversarial training parameters
+        self.adversarial_steps = 0
+        self.adversarial_update_freq = self.training_config.get('adversarial_update_freq', 100)
+        self.adversarial_ratio = self.training_config.get('adversarial_ratio', 0.5)
+        
     def train(self):
-        """Run training loop."""
+        """Run training loop with curriculum learning and self-play."""
         print(f"\n{'='*80}")
         print(f"Starting training with {self.num_episodes} episodes")
+        
+        if self.curriculum_enabled:
+            print(f"Curriculum learning enabled with {len(self.curriculum_stages)} stages")
+            for i, stage in enumerate(self.curriculum_stages):
+                print(f"  Stage {i+1}: {stage['name']} (difficulty={stage['difficulty']})")
+                strategies = stage.get('opponent_strategies', {})
+                if strategies:
+                    print(f"    Opponent strategies: {', '.join([f'{k}={v:.1%}' for k, v in strategies.items() if v > 0])}")
+        else:
+            print("Curriculum learning disabled - using fixed difficulty")
+        
+        if self.self_play_enabled:
+            print(f"Self-play enabled (starts at episode {self.self_play_start_episode})")
+            print(f"Policy bank size: {self.policy_bank_size}")
+            print(f"Policy bank update frequency: every {self.policy_bank_update_freq} episodes")
+        else:
+            print("Self-play disabled")
+        
         print(f"{'='*80}")
+        
+        print("Setting up training environment...")
         
         total_episodes = 0
         start_time = time.time()
         
-        for stage in range(3):  # Basic, intermediate, advanced
+        # Calculate episodes per stage if using curriculum
+        episodes_per_stage = []
+        if self.curriculum_enabled:
+            for stage in self.curriculum_stages:
+                episodes_per_stage.append(int(self.num_episodes * stage['duration']))
+        else:
+            # If curriculum disabled, use single stage
+            episodes_per_stage = [self.num_episodes]
+        
+        # Training loop across stages
+        for stage_idx in range(len(episodes_per_stage)):
+            if self.early_stopping_triggered:
+                print("\nEarly stopping triggered - ending training")
+                break
+            
             print(f"\n{'-'*60}")
-            print(f"Starting training stage {stage + 1}: {self.curriculum_stages[stage]['name']}")
-            print(f"Difficulty: {self.curriculum_stages[stage]['difficulty']}")
+            if self.curriculum_enabled:
+                print(f"Starting training stage {stage_idx + 1}: {self.curriculum_stages[stage_idx]['name']}")
+                print(f"Difficulty: {self.curriculum_stages[stage_idx]['difficulty']}")
+            else:
+                print(f"Starting training (fixed difficulty={self.env_config['difficulty']})")
             print(f"{'-'*60}")
             
             # Update curriculum stage
-            self.current_stage = stage
+            self.current_stage = stage_idx
             self.stage_progress = 0.0
             
-            # Calculate episodes for this stage
-            stage_duration = self.curriculum_stages[stage]['duration']
-            episodes_in_stage = int(self.num_episodes * stage_duration)
+            stage_episodes = episodes_per_stage[stage_idx]
             
-            for episode in range(episodes_in_stage):
+            # Training loop within each stage
+            for episode in range(stage_episodes):
+                if self.early_stopping_triggered:
+                    break
+                    
                 total_episodes += 1
                 
-                # Create environment for this episode
-                env = self._create_environment()
+                # Determine if this episode uses self-play
+                use_self_play = (self.self_play_enabled and 
+                               total_episodes > self.self_play_start_episode and
+                               random.random() < self.self_play_frequency)
+                
+                # Set up environment and opponents
+                env_config = self._setup_episode_environment(use_self_play)
+                env = PyquaticusWrapper(env_config)
                 env.debug_level = max(0, self.debug_level - 1)  # Reduce env verbosity
                 
                 # Run episode
@@ -136,17 +229,35 @@ class Trainer:
                 if 'agents' in experiences[-1].state:
                     self.episode_scores.append(env.team_scores[0])
                 
+                # Update policy bank for self-play
+                if self.self_play_enabled and total_episodes > 0 and total_episodes % self.policy_bank_update_freq == 0:
+                    # Save a checkpoint specifically for the policy bank
+                    policy_bank_name = f"policy_bank_ep{total_episodes}"
+                    policy_bank_path = self.save_checkpoint(policy_bank_name, preserve_history=False)
+                    
+                    # Add to policy bank and limit size
+                    self.policy_bank.append(policy_bank_path)
+                    if len(self.policy_bank) > self.policy_bank_size:
+                        # Remove oldest policy
+                        self.policy_bank.pop(0)
+                    
+                    print(f"\nUpdated policy bank at episode {total_episodes} (size: {len(self.policy_bank)})")
+                
                 # Log metrics
-                if episode % self.log_interval == 0 or episode == episodes_in_stage - 1:
+                if episode % self.log_interval == 0 or episode == stage_episodes - 1:
                     self._log_detailed_metrics(episode, total_episodes, stage, episode_time)
                 
                 # Print progress
-                if episode % max(1, episodes_in_stage // 100) == 0:
-                    self._print_progress(episode, episodes_in_stage, total_episodes, stage)
+                if episode % max(1, stage_episodes // 100) == 0:
+                    self._print_progress(episode, stage_episodes, total_episodes, stage)
                 
                 # Save checkpoint
                 if episode % self.checkpoint_interval == 0:
-                    self.save_checkpoint(f"stage_{stage}_episode_{episode}")
+                    if isinstance(stage, dict):
+                        stage_name = stage.get('name', 'stage')
+                        self.save_checkpoint(f"{stage_name}_episode_{episode}")
+                    else:
+                        self.save_checkpoint(f"stage_{stage}_episode_{episode}")
                     
                 # Update adversarial opponent
                 if episode % self.adversarial_update_freq == 0:
@@ -174,9 +285,18 @@ class Trainer:
         
         # Print progress bar and stats
         progress = episode / episodes_in_stage * 100
-        stage_name = self.curriculum_stages[stage]['name']
         
-        print(f"\r[Stage {stage+1}/{3}] {stage_name} "
+        # Handle stage parameter correctly whether it's a dict or an int
+        if isinstance(stage, dict):
+            stage_name = stage.get('name', 'Unknown')
+            stage_idx = self.curriculum_stages.index(stage) if stage in self.curriculum_stages else 0
+            stage_display = f"[Stage {stage_idx+1}/{len(self.curriculum_stages)}] {stage_name}"
+        else:  # stage is an int
+            stage_idx = stage
+            stage_name = self.curriculum_stages[stage_idx]['name'] if 0 <= stage_idx < len(self.curriculum_stages) else "Unknown"
+            stage_display = f"[Stage {stage_idx+1}/{len(self.curriculum_stages)}] {stage_name}"
+        
+        print(f"\r{stage_display} "
               f"Progress: {episode}/{episodes_in_stage} ({progress:.1f}%) "
               f"Win Rate: {np.mean(recent_wins):.2f} "
               f"Avg Reward: {np.mean(recent_rewards):.2f} "
@@ -200,7 +320,8 @@ class Trainer:
         
         # Log to metrics tracker
         self.metrics.log_training_metric('episode', total_episodes)
-        self.metrics.log_training_metric('stage', stage)
+        self.metrics.log_training_metric('stage', stage if isinstance(stage, int) else 
+                                         self.curriculum_stages.index(stage) if stage in self.curriculum_stages else 0)
         self.metrics.log_game_metric('win_rate', np.mean(recent_wins))
         self.metrics.log_training_metric('avg_reward', np.mean(recent_rewards))
         self.metrics.log_training_metric('episode_length', np.mean(recent_lengths))
@@ -209,7 +330,18 @@ class Trainer:
         # Print detailed summary
         if self.debug_level >= 1:
             print(f"\n{'-'*80}")
-            print(f"Episode {total_episodes} Summary (Stage {stage+1})")
+            # Handle stage parameter correctly whether it's a dict or an int
+            if isinstance(stage, dict):
+                stage_name = stage.get('name', 'Unknown')
+                print(f"Episode {total_episodes} Summary (Stage: {stage_name})")
+            else:  # stage is an int
+                stage_idx = stage
+                if 0 <= stage_idx < len(self.curriculum_stages):
+                    stage_name = self.curriculum_stages[stage_idx]['name']
+                    print(f"Episode {total_episodes} Summary (Stage {stage_idx+1}: {stage_name})")
+                else:
+                    print(f"Episode {total_episodes} Summary (Stage {stage_idx+1})")
+            
             print(f"Time: {episode_time:.2f}s, Steps: {recent_lengths[-1]}")
             print(f"Recent Stats (last 100 episodes):")
             print(f"  Win Rate: {np.mean(recent_wins):.2f}")
@@ -246,20 +378,33 @@ class Trainer:
         current_stage = self.curriculum_stages[self.current_stage]
         difficulty = current_stage['difficulty']
         
+        print("Creating environment with PyquaticusWrapper...")
+        
         # Adjust environment parameters based on difficulty
         env_config = self.env_config.copy()
         env_config['difficulty'] = difficulty
         env_config['debug_level'] = self.debug_level  # Pass debug level to environment
         
         # Adjust parameters based on difficulty
-        env_config['num_agents'] = int(3 + difficulty * 2)  # More agents at higher difficulty
+        env_config['num_agents'] = 3  # Fixed for Pyquaticus 3v3
         env_config['tag_radius'] = 5 - difficulty * 2  # Smaller tag radius at higher difficulty
         env_config['capture_radius'] = 10 - difficulty * 3  # Smaller capture radius at higher difficulty
+        env_config['render'] = self.render  # Pass render flag
         
-        # Create environment
-        return GameEnvironment(env_config)
+        print(f"PyquaticusWrapper config: {env_config}")
         
-    def _run_episode(self, env: GameEnvironment) -> Dict[str, Any]:
+        # Create Pyquaticus environment
+        try:
+            env = PyquaticusWrapper(env_config)
+            print("PyquaticusWrapper created successfully!")
+            return env
+        except Exception as e:
+            print(f"ERROR creating PyquaticusWrapper: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+        
+    def _run_episode(self, env: PyquaticusWrapper) -> Dict[str, Any]:
         """Run a single training episode."""
         state = env.reset()
         processed_state = self.state_processor.process_state(state)
@@ -492,19 +637,43 @@ class Trainer:
         # Log adversarial training
         self.writer.add_scalar('adversarial/steps', self.adversarial_steps, episode)
         
-    def save_checkpoint(self, path: str):
-        """Save training checkpoint."""
+    def save_checkpoint(self, path: str, preserve_history=True):
+        """
+        Save training checkpoint.
+        
+        Args:
+            path: Base path/name for the checkpoint
+            preserve_history: Whether to preserve this as a versioned checkpoint
+            
+        Returns:
+            str: Path to the saved checkpoint (latest version)
+        """
         # Create checkpoint directory if it doesn't exist
         checkpoint_dir = os.path.join('hrl', 'checkpoints')
         os.makedirs(checkpoint_dir, exist_ok=True)
         
         # Ensure path doesn't contain directory separators
         filename = os.path.basename(path)
+        
+        # Replace any dict in the path with a string representation
+        if '{' in filename:
+            # This is a dirty fix - replace the dict with a simpler string
+            filename = filename.replace(filename[filename.find('{'):filename.rfind('}')+1], "current_stage")
+        
+        # Get current timestamp for versioning
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Create a version-specific filename if preserving history
+        if preserve_history:
+            version_filename = f"{filename}_v{timestamp}.pth"
+            checkpoint_version_path = os.path.join(checkpoint_dir, version_filename)
+        
+        # Always create the latest version filename
         if not filename.endswith('.pth'):
             filename += '.pth'
-            
-        checkpoint_path = os.path.join(checkpoint_dir, filename)
+        checkpoint_latest_path = os.path.join(checkpoint_dir, filename)
         
+        # Prepare checkpoint data
         checkpoint = {
             'policy_state_dict': self.policy.state_dict(),
             'option_selector_state_dict': self.option_selector.state_dict(),
@@ -512,23 +681,94 @@ class Trainer:
             'config': self.config,
             'current_stage': self.current_stage,
             'stage_progress': self.stage_progress,
-            'adversarial_steps': self.adversarial_steps
+            'adversarial_steps': self.adversarial_steps,
+            'version': timestamp,
+            'episode_rewards': self.episode_rewards[-100:],  # Save last 100 rewards
+            'episode_wins': self.episode_wins[-100:],        # Save last 100 win records
+            'episode_scores': self.episode_scores[-100:]     # Save last 100 scores
         }
         
-        # Save with pickle_protocol=4 for better compatibility
-        torch.save(checkpoint, checkpoint_path, pickle_protocol=4)
+        # Save versioned checkpoint if preserving history
+        if preserve_history:
+            torch.save(checkpoint, checkpoint_version_path, pickle_protocol=4)
+            if self.debug_level >= 1:
+                print(f"Versioned checkpoint saved to {checkpoint_version_path}")
         
+        # Always save latest checkpoint
+        torch.save(checkpoint, checkpoint_latest_path, pickle_protocol=4)
         if self.debug_level >= 1:
-            print(f"Checkpoint saved to {checkpoint_path}")
+            print(f"Latest checkpoint saved to {checkpoint_latest_path}")
+            
+        # Clean up old versions if needed
+        if preserve_history and hasattr(self, 'max_checkpoints'):
+            self._cleanup_old_checkpoints(filename, checkpoint_dir)
+            
+        # Return the path to the latest checkpoint
+        return checkpoint_latest_path
+    
+    def _cleanup_old_checkpoints(self, base_filename, checkpoint_dir):
+        """
+        Clean up old checkpoint versions to maintain a maximum number of saved versions.
+        
+        Args:
+            base_filename: Base name of the checkpoint file
+            checkpoint_dir: Directory containing checkpoints
+        """
+        # Get all versioned checkpoints for this base filename
+        base_name = base_filename.replace('.pth', '')
+        pattern = f"{base_name}_v*.pth"
+        
+        # List all matching files
+        import glob
+        files = glob.glob(os.path.join(checkpoint_dir, pattern))
+        
+        # If we have more files than the max allowed, delete the oldest ones
+        if len(files) > self.max_checkpoints:
+            # Sort files by creation time (oldest first)
+            files.sort(key=os.path.getctime)
+            
+            # Remove oldest files to keep only max_checkpoints
+            files_to_remove = files[:-self.max_checkpoints]
+            for old_file in files_to_remove:
+                if os.path.exists(old_file):
+                    os.remove(old_file)
+                    if self.debug_level >= 2:
+                        print(f"Removed old checkpoint: {old_file}")
         
     def load_checkpoint(self, path: str):
-        """Load training checkpoint."""
+        """
+        Load training checkpoint.
+        
+        Args:
+            path: Path to the checkpoint to load. Can be:
+                - A full path
+                - Just a filename (will look in checkpoints directory)
+                - A model name without .pth extension
+                - A versioned checkpoint name with 'v' followed by timestamp
+                
+        Returns:
+            bool: True if checkpoint was loaded successfully, False otherwise
+        """
         # Check if path is a filename only or a full path
         if os.path.dirname(path) == '':
             # Assume it's in the checkpoints directory
             checkpoint_path = os.path.join('hrl', 'checkpoints', path)
             if not os.path.exists(checkpoint_path) and not checkpoint_path.endswith('.pth'):
                 checkpoint_path += '.pth'
+                
+            # If still not found, check if it's a request for a specific version
+            if not os.path.exists(checkpoint_path) and '_v' not in path:
+                # Try to find the latest version by timestamp
+                import glob
+                base_name = path.replace('.pth', '')
+                pattern = os.path.join('hrl', 'checkpoints', f"{base_name}_v*.pth")
+                versioned_files = glob.glob(pattern)
+                
+                if versioned_files:
+                    # Sort by creation time, newest first
+                    versioned_files.sort(key=os.path.getctime, reverse=True)
+                    checkpoint_path = versioned_files[0]
+                    print(f"Loading the most recent version: {os.path.basename(checkpoint_path)}")
         else:
             checkpoint_path = path
             
@@ -546,7 +786,21 @@ class Trainer:
             self.stage_progress = checkpoint['stage_progress']
             self.adversarial_steps = checkpoint['adversarial_steps']
             
-            print(f"Checkpoint loaded from {checkpoint_path}")
+            # Load extra data if available
+            if 'episode_rewards' in checkpoint:
+                self.episode_rewards = checkpoint['episode_rewards']
+            if 'episode_wins' in checkpoint:
+                self.episode_wins = checkpoint['episode_wins']
+            if 'episode_scores' in checkpoint:
+                self.episode_scores = checkpoint['episode_scores']
+                
+            # Print version information if available
+            if 'version' in checkpoint:
+                version_timestamp = checkpoint['version']
+                print(f"Loaded checkpoint from {checkpoint_path} (version: {version_timestamp})")
+            else:
+                print(f"Loaded checkpoint from {checkpoint_path}")
+                
             return True
         except Exception as e:
             print(f"Error loading checkpoint: {e}")
@@ -617,4 +871,42 @@ class Trainer:
         
         # Save metrics
         if episode % (self.log_interval * 5) == 0:
-            self.metrics.save_metrics(f"{self.log_dir}/metrics_episode_{episode}.json") 
+            self.metrics.save_metrics(f"{self.log_dir}/metrics_episode_{episode}.json")
+        
+    def _setup_episode_environment(self, use_self_play=False):
+        """Set up environment configuration for an episode."""
+        # Start with base environment config
+        episode_env_config = self.env_config.copy()
+        
+        # Get current curriculum stage configuration
+        if self.curriculum_enabled:
+            stage = self.curriculum_stages[self.current_stage]
+            episode_env_config['difficulty'] = stage['difficulty']
+            
+            # Apply opponent strategies from current stage
+            if 'opponent_strategies' in stage:
+                episode_env_config['opponent_strategies'] = stage['opponent_strategies']
+        
+        # If using self-play, configure opponent to use a policy from the bank
+        if use_self_play and self.policy_bank:
+            # Choose a random policy from the bank
+            policy_idx = random.randint(0, len(self.policy_bank) - 1)
+            
+            # Get the policy path
+            policy_path = self.policy_bank[policy_idx]
+            
+            # Set self-play config
+            episode_env_config['self_play'] = True
+            episode_env_config['opponent_policy'] = policy_path
+            
+            if self.debug_level >= 2:
+                print(f"Using self-play with policy {os.path.basename(policy_path)}")
+        else:
+            episode_env_config['self_play'] = False
+            
+        # Apply any stage-specific environment modifications
+        if self.curriculum_enabled and 'env_modifications' in stage:
+            for key, value in stage['env_modifications'].items():
+                episode_env_config[key] = value
+                
+        return episode_env_config 

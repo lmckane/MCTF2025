@@ -1,9 +1,24 @@
+Traceback (most recent call last):
+  File "C:\Users\Liam\Documents\GitHub\MCTF2025\hrl\training\train.py", line 271, in main
+    trainer.train()
+  File "c:\users\liam\documents\github\mctf2025\hrl\training\trainer.py", line 203, in train
+    experiences = self._run_episode(env)
+  File "c:\users\liam\documents\github\mctf2025\hrl\training\trainer.py", line 365, in _run_episode
+    next_state, reward, done, info = env.step(action)
+  File "c:\users\liam\documents\github\mctf2025\hrl\environment\game_env.py", line 233, in step
+    reward = self._calculate_reward(self.agents[0])
+  File "c:\users\liam\documents\github\mctf2025\hrl\environment\game_env.py", line 541, in _calculate_reward
+    if other != agent and other.team == agent_team and not other.is_tagged:
+  File "<string>", line 4, in __eq__
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
 
 ================================================================================
 Starting training with the following parameters:
   Episodes: 5000
   Agents per team: 3
   Max steps per episode: 500
+  Curriculum learning: Enabled
+  Self-play: Enabled
   Debug level: 0
   Log directory: logs
   Checkpoint directory: hrl\checkpoints
@@ -13,6 +28,16 @@ Initializing trainer...
 
 ================================================================================
 Starting training with 5000 episodes
+Curriculum learning enabled with 4 stages
+  Stage 1: basic (difficulty=0.2)
+    Opponent strategies: random=70.0%, direct=30.0%
+  Stage 2: intermediate (difficulty=0.5)
+    Opponent strategies: random=30.0%, direct=40.0%, defensive=20.0%, coordinated=10.0%
+  Stage 3: advanced (difficulty=0.8)
+    Opponent strategies: random=10.0%, direct=20.0%, defensive=30.0%, aggressive=20.0%, coordinated=20.0%
+  Stage 4: expert (difficulty=1.0)
+    Opponent strategies: defensive=20.0%, aggressive=30.0%, coordinated=50.0%
+Self-play enabled (starts at episode 1000)
 ================================================================================
 
 ------------------------------------------------------------
@@ -20,348 +45,9 @@ Starting training stage 1: basic
 Difficulty: 0.2
 ------------------------------------------------------------
 
-[Stage 1/3] basic Progress: 0/1000 (0.0%) Win Rate: 0.00 Avg Reward: 241.75 Avg Score: 3.00
-[Stage 1/3] basic Progress: 10/1000 (1.0%) Win Rate: 0.00 Avg Reward: 219.47 Avg Score: 3.00
-[Stage 1/3] basic Progress: 20/1000 (2.0%) Win Rate: 0.00 Avg Reward: 222.53 Avg Score: 3.00
-[Stage 1/3] basic Progress: 30/1000 (3.0%) Win Rate: 0.00 Avg Reward: 223.43 Avg Score: 3.00
-[Stage 1/3] basic Progress: 40/1000 (4.0%) Win Rate: 0.00 Avg Reward: 223.69 Avg Score: 3.00
-[Stage 1/3] basic Progress: 50/1000 (5.0%) Win Rate: 0.00 Avg Reward: 223.79 Avg Score: 3.00
-[Stage 1/3] basic Progress: 60/1000 (6.0%) Win Rate: 0.00 Avg Reward: 224.64 Avg Score: 3.00
-[Stage 1/3] basic Progress: 70/1000 (7.0%) Win Rate: 0.00 Avg Reward: 224.19 Avg Score: 3.00
-[Stage 1/3] basic Progress: 80/1000 (8.0%) Win Rate: 0.00 Avg Reward: 224.40 Avg Score: 3.00
-[Stage 1/3] basic Progress: 90/1000 (9.0%) Win Rate: 0.00 Avg Reward: 223.25 Avg Score: 3.00
-[Stage 1/3] basic Progress: 100/1000 (10.0%) Win Rate: 0.00 Avg Reward: 222.71 Avg Score: 3.00
+Training error: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
 
-[Stage 1/3] basic Progress: 110/1000 (11.0%) Win Rate: 0.00 Avg Reward: 223.85 Avg Score: 3.00
-[Stage 1/3] basic Progress: 120/1000 (12.0%) Win Rate: 0.00 Avg Reward: 222.65 Avg Score: 3.00
-[Stage 1/3] basic Progress: 130/1000 (13.0%) Win Rate: 0.00 Avg Reward: 222.35 Avg Score: 3.00
-[Stage 1/3] basic Progress: 140/1000 (14.0%) Win Rate: 0.00 Avg Reward: 222.85 Avg Score: 3.00
-[Stage 1/3] basic Progress: 150/1000 (15.0%) Win Rate: 0.00 Avg Reward: 222.39 Avg Score: 3.00
-[Stage 1/3] basic Progress: 160/1000 (16.0%) Win Rate: 0.00 Avg Reward: 221.39 Avg Score: 3.00
-[Stage 1/3] basic Progress: 170/1000 (17.0%) Win Rate: 0.00 Avg Reward: 222.11 Avg Score: 3.00
-[Stage 1/3] basic Progress: 180/1000 (18.0%) Win Rate: 0.00 Avg Reward: 221.07 Avg Score: 3.00
-[Stage 1/3] basic Progress: 190/1000 (19.0%) Win Rate: 0.00 Avg Reward: 222.01 Avg Score: 3.00
-[Stage 1/3] basic Progress: 200/1000 (20.0%) Win Rate: 0.00 Avg Reward: 222.50 Avg Score: 3.00
-
-[Stage 1/3] basic Progress: 210/1000 (21.0%) Win Rate: 0.00 Avg Reward: 221.91 Avg Score: 3.00
-[Stage 1/3] basic Progress: 220/1000 (22.0%) Win Rate: 0.00 Avg Reward: 222.36 Avg Score: 3.00
-[Stage 1/3] basic Progress: 230/1000 (23.0%) Win Rate: 0.00 Avg Reward: 222.91 Avg Score: 3.00
-[Stage 1/3] basic Progress: 240/1000 (24.0%) Win Rate: 0.00 Avg Reward: 222.97 Avg Score: 3.00
-[Stage 1/3] basic Progress: 250/1000 (25.0%) Win Rate: 0.00 Avg Reward: 222.39 Avg Score: 3.00
-[Stage 1/3] basic Progress: 260/1000 (26.0%) Win Rate: 0.00 Avg Reward: 222.49 Avg Score: 3.00
-[Stage 1/3] basic Progress: 270/1000 (27.0%) Win Rate: 0.00 Avg Reward: 221.90 Avg Score: 3.00
-[Stage 1/3] basic Progress: 280/1000 (28.0%) Win Rate: 0.00 Avg Reward: 222.31 Avg Score: 3.00
-[Stage 1/3] basic Progress: 290/1000 (29.0%) Win Rate: 0.00 Avg Reward: 221.69 Avg Score: 3.00
-[Stage 1/3] basic Progress: 300/1000 (30.0%) Win Rate: 0.00 Avg Reward: 221.28 Avg Score: 3.00
-
-[Stage 1/3] basic Progress: 310/1000 (31.0%) Win Rate: 0.00 Avg Reward: 221.57 Avg Score: 3.00
-[Stage 1/3] basic Progress: 320/1000 (32.0%) Win Rate: 0.00 Avg Reward: 222.19 Avg Score: 3.00
-[Stage 1/3] basic Progress: 330/1000 (33.0%) Win Rate: 0.00 Avg Reward: 221.83 Avg Score: 3.00
-[Stage 1/3] basic Progress: 340/1000 (34.0%) Win Rate: 0.00 Avg Reward: 221.48 Avg Score: 3.00
-[Stage 1/3] basic Progress: 350/1000 (35.0%) Win Rate: 0.00 Avg Reward: 222.36 Avg Score: 3.00
-[Stage 1/3] basic Progress: 360/1000 (36.0%) Win Rate: 0.00 Avg Reward: 223.54 Avg Score: 3.00
-[Stage 1/3] basic Progress: 370/1000 (37.0%) Win Rate: 0.00 Avg Reward: 223.03 Avg Score: 3.00
-[Stage 1/3] basic Progress: 380/1000 (38.0%) Win Rate: 0.00 Avg Reward: 224.07 Avg Score: 3.00
-[Stage 1/3] basic Progress: 390/1000 (39.0%) Win Rate: 0.00 Avg Reward: 224.41 Avg Score: 3.00
-[Stage 1/3] basic Progress: 400/1000 (40.0%) Win Rate: 0.00 Avg Reward: 224.89 Avg Score: 3.00
-
-[Stage 1/3] basic Progress: 410/1000 (41.0%) Win Rate: 0.00 Avg Reward: 225.13 Avg Score: 3.00
-[Stage 1/3] basic Progress: 420/1000 (42.0%) Win Rate: 0.00 Avg Reward: 224.72 Avg Score: 3.00
-[Stage 1/3] basic Progress: 430/1000 (43.0%) Win Rate: 0.00 Avg Reward: 224.45 Avg Score: 3.00
-[Stage 1/3] basic Progress: 440/1000 (44.0%) Win Rate: 0.00 Avg Reward: 223.52 Avg Score: 3.00
-[Stage 1/3] basic Progress: 450/1000 (45.0%) Win Rate: 0.00 Avg Reward: 223.00 Avg Score: 3.00
-[Stage 1/3] basic Progress: 460/1000 (46.0%) Win Rate: 0.00 Avg Reward: 221.13 Avg Score: 3.00
-[Stage 1/3] basic Progress: 470/1000 (47.0%) Win Rate: 0.00 Avg Reward: 221.20 Avg Score: 3.00
-[Stage 1/3] basic Progress: 480/1000 (48.0%) Win Rate: 0.00 Avg Reward: 220.40 Avg Score: 3.00
-[Stage 1/3] basic Progress: 490/1000 (49.0%) Win Rate: 0.00 Avg Reward: 221.00 Avg Score: 3.00
-[Stage 1/3] basic Progress: 500/1000 (50.0%) Win Rate: 0.00 Avg Reward: 221.62 Avg Score: 3.00
-
-[Stage 1/3] basic Progress: 510/1000 (51.0%) Win Rate: 0.00 Avg Reward: 220.56 Avg Score: 3.00
-[Stage 1/3] basic Progress: 520/1000 (52.0%) Win Rate: 0.00 Avg Reward: 220.57 Avg Score: 3.00
-[Stage 1/3] basic Progress: 530/1000 (53.0%) Win Rate: 0.00 Avg Reward: 220.21 Avg Score: 3.00
-[Stage 1/3] basic Progress: 540/1000 (54.0%) Win Rate: 0.00 Avg Reward: 220.53 Avg Score: 3.00
-[Stage 1/3] basic Progress: 550/1000 (55.0%) Win Rate: 0.00 Avg Reward: 220.08 Avg Score: 3.00
-[Stage 1/3] basic Progress: 560/1000 (56.0%) Win Rate: 0.00 Avg Reward: 220.87 Avg Score: 3.00
-[Stage 1/3] basic Progress: 570/1000 (57.0%) Win Rate: 0.00 Avg Reward: 221.28 Avg Score: 3.00
-[Stage 1/3] basic Progress: 580/1000 (58.0%) Win Rate: 0.00 Avg Reward: 221.68 Avg Score: 3.00
-[Stage 1/3] basic Progress: 590/1000 (59.0%) Win Rate: 0.00 Avg Reward: 221.83 Avg Score: 3.00
-[Stage 1/3] basic Progress: 600/1000 (60.0%) Win Rate: 0.00 Avg Reward: 222.12 Avg Score: 3.00
-
-[Stage 1/3] basic Progress: 610/1000 (61.0%) Win Rate: 0.00 Avg Reward: 221.81 Avg Score: 3.00
-[Stage 1/3] basic Progress: 620/1000 (62.0%) Win Rate: 0.00 Avg Reward: 221.62 Avg Score: 3.00
-[Stage 1/3] basic Progress: 630/1000 (63.0%) Win Rate: 0.00 Avg Reward: 222.39 Avg Score: 3.00
-[Stage 1/3] basic Progress: 640/1000 (64.0%) Win Rate: 0.00 Avg Reward: 223.44 Avg Score: 3.00
-[Stage 1/3] basic Progress: 650/1000 (65.0%) Win Rate: 0.00 Avg Reward: 224.71 Avg Score: 3.00
-[Stage 1/3] basic Progress: 660/1000 (66.0%) Win Rate: 0.00 Avg Reward: 225.65 Avg Score: 3.00
-[Stage 1/3] basic Progress: 670/1000 (67.0%) Win Rate: 0.00 Avg Reward: 225.38 Avg Score: 3.00
-[Stage 1/3] basic Progress: 680/1000 (68.0%) Win Rate: 0.00 Avg Reward: 223.95 Avg Score: 3.00
-[Stage 1/3] basic Progress: 690/1000 (69.0%) Win Rate: 0.00 Avg Reward: 248.10 Avg Score: 2.99
-[Stage 1/3] basic Progress: 700/1000 (70.0%) Win Rate: 0.00 Avg Reward: 246.39 Avg Score: 2.99
-
-[Stage 1/3] basic Progress: 710/1000 (71.0%) Win Rate: 0.00 Avg Reward: 246.38 Avg Score: 2.99
-[Stage 1/3] basic Progress: 720/1000 (72.0%) Win Rate: 0.00 Avg Reward: 247.53 Avg Score: 2.99
-[Stage 1/3] basic Progress: 730/1000 (73.0%) Win Rate: 0.00 Avg Reward: 246.90 Avg Score: 2.99
-[Stage 1/3] basic Progress: 740/1000 (74.0%) Win Rate: 0.00 Avg Reward: 247.50 Avg Score: 2.99
-[Stage 1/3] basic Progress: 750/1000 (75.0%) Win Rate: 0.00 Avg Reward: 246.79 Avg Score: 2.99
-[Stage 1/3] basic Progress: 760/1000 (76.0%) Win Rate: 0.00 Avg Reward: 244.81 Avg Score: 2.99
-[Stage 1/3] basic Progress: 770/1000 (77.0%) Win Rate: 0.00 Avg Reward: 244.30 Avg Score: 2.99
-[Stage 1/3] basic Progress: 780/1000 (78.0%) Win Rate: 0.00 Avg Reward: 245.31 Avg Score: 2.99
-[Stage 1/3] basic Progress: 790/1000 (79.0%) Win Rate: 0.00 Avg Reward: 221.37 Avg Score: 3.00
-[Stage 1/3] basic Progress: 800/1000 (80.0%) Win Rate: 0.00 Avg Reward: 222.26 Avg Score: 3.00
-
-[Stage 1/3] basic Progress: 810/1000 (81.0%) Win Rate: 0.00 Avg Reward: 223.13 Avg Score: 3.00
-[Stage 1/3] basic Progress: 820/1000 (82.0%) Win Rate: 0.00 Avg Reward: 222.70 Avg Score: 3.00
-[Stage 1/3] basic Progress: 830/1000 (83.0%) Win Rate: 0.00 Avg Reward: 223.09 Avg Score: 3.00
-[Stage 1/3] basic Progress: 840/1000 (84.0%) Win Rate: 0.00 Avg Reward: 222.36 Avg Score: 3.00
-[Stage 1/3] basic Progress: 850/1000 (85.0%) Win Rate: 0.00 Avg Reward: 222.59 Avg Score: 3.00
-[Stage 1/3] basic Progress: 860/1000 (86.0%) Win Rate: 0.00 Avg Reward: 223.09 Avg Score: 3.00
-[Stage 1/3] basic Progress: 870/1000 (87.0%) Win Rate: 0.00 Avg Reward: 223.94 Avg Score: 3.00
-[Stage 1/3] basic Progress: 880/1000 (88.0%) Win Rate: 0.00 Avg Reward: 223.58 Avg Score: 3.00
-[Stage 1/3] basic Progress: 890/1000 (89.0%) Win Rate: 0.00 Avg Reward: 223.61 Avg Score: 3.00
-[Stage 1/3] basic Progress: 900/1000 (90.0%) Win Rate: 0.00 Avg Reward: 223.35 Avg Score: 3.00
-
-[Stage 1/3] basic Progress: 910/1000 (91.0%) Win Rate: 0.00 Avg Reward: 224.41 Avg Score: 3.00
-[Stage 1/3] basic Progress: 920/1000 (92.0%) Win Rate: 0.00 Avg Reward: 224.55 Avg Score: 3.00
-[Stage 1/3] basic Progress: 930/1000 (93.0%) Win Rate: 0.00 Avg Reward: 224.41 Avg Score: 3.00
-[Stage 1/3] basic Progress: 940/1000 (94.0%) Win Rate: 0.00 Avg Reward: 222.55 Avg Score: 3.00
-[Stage 1/3] basic Progress: 950/1000 (95.0%) Win Rate: 0.00 Avg Reward: 222.75 Avg Score: 3.00
-[Stage 1/3] basic Progress: 960/1000 (96.0%) Win Rate: 0.00 Avg Reward: 224.09 Avg Score: 3.00
-[Stage 1/3] basic Progress: 970/1000 (97.0%) Win Rate: 0.00 Avg Reward: 224.67 Avg Score: 3.00
-[Stage 1/3] basic Progress: 980/1000 (98.0%) Win Rate: 0.00 Avg Reward: 224.33 Avg Score: 3.00
-[Stage 1/3] basic Progress: 990/1000 (99.0%) Win Rate: 0.00 Avg Reward: 223.12 Avg Score: 3.00
-------------------------------------------------------------
-Starting training stage 2: intermediate
-Difficulty: 0.5
-------------------------------------------------------------
-
-[Stage 2/3] intermediate Progress: 0/1500 (0.0%) Win Rate: 0.00 Avg Reward: 222.90 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 15/1500 (1.0%) Win Rate: 0.00 Avg Reward: 223.11 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 30/1500 (2.0%) Win Rate: 0.00 Avg Reward: 225.69 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 45/1500 (3.0%) Win Rate: 0.00 Avg Reward: 229.00 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 60/1500 (4.0%) Win Rate: 0.00 Avg Reward: 229.92 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 75/1500 (5.0%) Win Rate: 0.00 Avg Reward: 231.43 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 90/1500 (6.0%) Win Rate: 0.00 Avg Reward: 233.89 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 105/1500 (7.0%) Win Rate: 0.00 Avg Reward: 234.72 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 120/1500 (8.0%) Win Rate: 0.00 Avg Reward: 235.18 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 135/1500 (9.0%) Win Rate: 0.00 Avg Reward: 233.08 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 150/1500 (10.0%) Win Rate: 0.00 Avg Reward: 240.04 Avg Score: 3.00
-
-[Stage 2/3] intermediate Progress: 165/1500 (11.0%) Win Rate: 0.00 Avg Reward: 241.12 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 180/1500 (12.0%) Win Rate: 0.00 Avg Reward: 240.54 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 195/1500 (13.0%) Win Rate: 0.00 Avg Reward: 240.21 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 210/1500 (14.0%) Win Rate: 0.00 Avg Reward: 240.18 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 225/1500 (15.0%) Win Rate: 0.00 Avg Reward: 240.47 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 240/1500 (16.0%) Win Rate: 0.00 Avg Reward: 243.25 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 255/1500 (17.0%) Win Rate: 0.00 Avg Reward: 236.68 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 270/1500 (18.0%) Win Rate: 0.00 Avg Reward: 235.54 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 285/1500 (19.0%) Win Rate: 0.00 Avg Reward: 235.14 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 300/1500 (20.0%) Win Rate: 0.00 Avg Reward: 236.74 Avg Score: 3.00
-
-[Stage 2/3] intermediate Progress: 315/1500 (21.0%) Win Rate: 0.00 Avg Reward: 237.41 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 330/1500 (22.0%) Win Rate: 0.00 Avg Reward: 235.66 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 345/1500 (23.0%) Win Rate: 0.00 Avg Reward: 234.24 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 360/1500 (24.0%) Win Rate: 0.00 Avg Reward: 233.23 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 375/1500 (25.0%) Win Rate: 0.00 Avg Reward: 234.86 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 390/1500 (26.0%) Win Rate: 0.00 Avg Reward: 235.77 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 405/1500 (27.0%) Win Rate: 0.00 Avg Reward: 233.55 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 420/1500 (28.0%) Win Rate: 0.00 Avg Reward: 232.30 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 435/1500 (29.0%) Win Rate: 0.00 Avg Reward: 232.43 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 450/1500 (30.0%) Win Rate: 0.00 Avg Reward: 232.13 Avg Score: 3.00
-
-[Stage 2/3] intermediate Progress: 465/1500 (31.0%) Win Rate: 0.00 Avg Reward: 231.33 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 480/1500 (32.0%) Win Rate: 0.00 Avg Reward: 231.47 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 495/1500 (33.0%) Win Rate: 0.00 Avg Reward: 231.31 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 510/1500 (34.0%) Win Rate: 0.00 Avg Reward: 232.58 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 525/1500 (35.0%) Win Rate: 0.00 Avg Reward: 231.23 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 540/1500 (36.0%) Win Rate: 0.00 Avg Reward: 232.96 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 555/1500 (37.0%) Win Rate: 0.00 Avg Reward: 234.53 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 570/1500 (38.0%) Win Rate: 0.00 Avg Reward: 235.10 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 585/1500 (39.0%) Win Rate: 0.00 Avg Reward: 234.34 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 600/1500 (40.0%) Win Rate: 0.00 Avg Reward: 234.50 Avg Score: 3.00
-
-[Stage 2/3] intermediate Progress: 615/1500 (41.0%) Win Rate: 0.00 Avg Reward: 234.52 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 630/1500 (42.0%) Win Rate: 0.00 Avg Reward: 234.42 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 645/1500 (43.0%) Win Rate: 0.00 Avg Reward: 234.29 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 660/1500 (44.0%) Win Rate: 0.00 Avg Reward: 230.84 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 675/1500 (45.0%) Win Rate: 0.00 Avg Reward: 231.57 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 690/1500 (46.0%) Win Rate: 0.00 Avg Reward: 232.51 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 705/1500 (47.0%) Win Rate: 0.00 Avg Reward: 232.52 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 720/1500 (48.0%) Win Rate: 0.00 Avg Reward: 231.59 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 735/1500 (49.0%) Win Rate: 0.00 Avg Reward: 231.27 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 750/1500 (50.0%) Win Rate: 0.00 Avg Reward: 231.53 Avg Score: 3.00
-
-[Stage 2/3] intermediate Progress: 765/1500 (51.0%) Win Rate: 0.00 Avg Reward: 231.40 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 780/1500 (52.0%) Win Rate: 0.00 Avg Reward: 230.21 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 795/1500 (53.0%) Win Rate: 0.00 Avg Reward: 230.62 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 810/1500 (54.0%) Win Rate: 0.00 Avg Reward: 230.60 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 825/1500 (55.0%) Win Rate: 0.00 Avg Reward: 232.42 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 840/1500 (56.0%) Win Rate: 0.00 Avg Reward: 233.76 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 855/1500 (57.0%) Win Rate: 0.00 Avg Reward: 232.96 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 870/1500 (58.0%) Win Rate: 0.00 Avg Reward: 232.72 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 885/1500 (59.0%) Win Rate: 0.00 Avg Reward: 233.23 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 900/1500 (60.0%) Win Rate: 0.00 Avg Reward: 232.58 Avg Score: 3.00
-
-[Stage 2/3] intermediate Progress: 915/1500 (61.0%) Win Rate: 0.00 Avg Reward: 231.73 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 930/1500 (62.0%) Win Rate: 0.00 Avg Reward: 230.27 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 945/1500 (63.0%) Win Rate: 0.00 Avg Reward: 230.36 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 960/1500 (64.0%) Win Rate: 0.00 Avg Reward: 232.71 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 975/1500 (65.0%) Win Rate: 0.00 Avg Reward: 232.64 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 990/1500 (66.0%) Win Rate: 0.00 Avg Reward: 233.43 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1005/1500 (67.0%) Win Rate: 0.00 Avg Reward: 234.37 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1020/1500 (68.0%) Win Rate: 0.00 Avg Reward: 235.75 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1035/1500 (69.0%) Win Rate: 0.00 Avg Reward: 236.34 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1050/1500 (70.0%) Win Rate: 0.00 Avg Reward: 234.92 Avg Score: 3.00
-
-[Stage 2/3] intermediate Progress: 1065/1500 (71.0%) Win Rate: 0.00 Avg Reward: 236.37 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1080/1500 (72.0%) Win Rate: 0.00 Avg Reward: 236.74 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1095/1500 (73.0%) Win Rate: 0.00 Avg Reward: 236.22 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1110/1500 (74.0%) Win Rate: 0.00 Avg Reward: 236.00 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1125/1500 (75.0%) Win Rate: 0.00 Avg Reward: 234.85 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1140/1500 (76.0%) Win Rate: 0.00 Avg Reward: 238.30 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1155/1500 (77.0%) Win Rate: 0.00 Avg Reward: 236.61 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1170/1500 (78.0%) Win Rate: 0.00 Avg Reward: 235.52 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1185/1500 (79.0%) Win Rate: 0.00 Avg Reward: 234.76 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1200/1500 (80.0%) Win Rate: 0.00 Avg Reward: 233.08 Avg Score: 3.00
-
-[Stage 2/3] intermediate Progress: 1215/1500 (81.0%) Win Rate: 0.00 Avg Reward: 234.66 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1230/1500 (82.0%) Win Rate: 0.00 Avg Reward: 233.54 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1245/1500 (83.0%) Win Rate: 0.00 Avg Reward: 232.89 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1260/1500 (84.0%) Win Rate: 0.00 Avg Reward: 233.52 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1275/1500 (85.0%) Win Rate: 0.00 Avg Reward: 233.67 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1290/1500 (86.0%) Win Rate: 0.00 Avg Reward: 233.97 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1305/1500 (87.0%) Win Rate: 0.00 Avg Reward: 234.50 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1320/1500 (88.0%) Win Rate: 0.00 Avg Reward: 233.28 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1335/1500 (89.0%) Win Rate: 0.00 Avg Reward: 233.70 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1350/1500 (90.0%) Win Rate: 0.00 Avg Reward: 233.58 Avg Score: 3.00
-
-[Stage 2/3] intermediate Progress: 1365/1500 (91.0%) Win Rate: 0.00 Avg Reward: 233.11 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1380/1500 (92.0%) Win Rate: 0.00 Avg Reward: 232.95 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1395/1500 (93.0%) Win Rate: 0.00 Avg Reward: 235.10 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1410/1500 (94.0%) Win Rate: 0.00 Avg Reward: 234.36 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1425/1500 (95.0%) Win Rate: 0.00 Avg Reward: 233.08 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1440/1500 (96.0%) Win Rate: 0.00 Avg Reward: 233.40 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1455/1500 (97.0%) Win Rate: 0.00 Avg Reward: 234.89 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1470/1500 (98.0%) Win Rate: 0.00 Avg Reward: 235.18 Avg Score: 3.00
-[Stage 2/3] intermediate Progress: 1485/1500 (99.0%) Win Rate: 0.00 Avg Reward: 237.22 Avg Score: 3.00
-------------------------------------------------------------
-Starting training stage 3: advanced
-Difficulty: 0.8
-------------------------------------------------------------
-
-[Stage 3/3] advanced Progress: 0/2500 (0.0%) Win Rate: 0.00 Avg Reward: 234.28 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 25/2500 (1.0%) Win Rate: 0.00 Avg Reward: 236.69 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 50/2500 (2.0%) Win Rate: 0.00 Avg Reward: 236.61 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 75/2500 (3.0%) Win Rate: 0.00 Avg Reward: 236.60 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 100/2500 (4.0%) Win Rate: 0.00 Avg Reward: 238.68 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 125/2500 (5.0%) Win Rate: 0.00 Avg Reward: 238.11 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 150/2500 (6.0%) Win Rate: 0.00 Avg Reward: 237.86 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 175/2500 (7.0%) Win Rate: 0.00 Avg Reward: 237.09 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 200/2500 (8.0%) Win Rate: 0.00 Avg Reward: 238.22 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 225/2500 (9.0%) Win Rate: 0.00 Avg Reward: 240.63 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 250/2500 (10.0%) Win Rate: 0.00 Avg Reward: 242.21 Avg Score: 3.00
-
-[Stage 3/3] advanced Progress: 275/2500 (11.0%) Win Rate: 0.00 Avg Reward: 244.05 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 300/2500 (12.0%) Win Rate: 0.00 Avg Reward: 242.09 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 325/2500 (13.0%) Win Rate: 0.00 Avg Reward: 240.84 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 350/2500 (14.0%) Win Rate: 0.00 Avg Reward: 239.23 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 375/2500 (15.0%) Win Rate: 0.00 Avg Reward: 238.39 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 400/2500 (16.0%) Win Rate: 0.00 Avg Reward: 238.73 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 425/2500 (17.0%) Win Rate: 0.00 Avg Reward: 238.60 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 450/2500 (18.0%) Win Rate: 0.00 Avg Reward: 237.25 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 475/2500 (19.0%) Win Rate: 0.00 Avg Reward: 237.99 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 500/2500 (20.0%) Win Rate: 0.00 Avg Reward: 237.58 Avg Score: 3.00
-
-[Stage 3/3] advanced Progress: 525/2500 (21.0%) Win Rate: 0.00 Avg Reward: 237.17 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 550/2500 (22.0%) Win Rate: 0.00 Avg Reward: 239.05 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 575/2500 (23.0%) Win Rate: 0.00 Avg Reward: 236.33 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 600/2500 (24.0%) Win Rate: 0.00 Avg Reward: 236.38 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 625/2500 (25.0%) Win Rate: 0.00 Avg Reward: 237.00 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 650/2500 (26.0%) Win Rate: 0.00 Avg Reward: 237.19 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 675/2500 (27.0%) Win Rate: 0.00 Avg Reward: 237.62 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 700/2500 (28.0%) Win Rate: 0.00 Avg Reward: 238.30 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 725/2500 (29.0%) Win Rate: 0.00 Avg Reward: 238.67 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 750/2500 (30.0%) Win Rate: 0.00 Avg Reward: 236.41 Avg Score: 3.00
-
-[Stage 3/3] advanced Progress: 775/2500 (31.0%) Win Rate: 0.00 Avg Reward: 237.70 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 800/2500 (32.0%) Win Rate: 0.00 Avg Reward: 237.17 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 825/2500 (33.0%) Win Rate: 0.00 Avg Reward: 236.52 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 850/2500 (34.0%) Win Rate: 0.00 Avg Reward: 237.33 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 875/2500 (35.0%) Win Rate: 0.00 Avg Reward: 235.97 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 900/2500 (36.0%) Win Rate: 0.00 Avg Reward: 236.31 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 925/2500 (37.0%) Win Rate: 0.00 Avg Reward: 236.96 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 950/2500 (38.0%) Win Rate: 0.00 Avg Reward: 238.13 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 975/2500 (39.0%) Win Rate: 0.00 Avg Reward: 237.25 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1000/2500 (40.0%) Win Rate: 0.00 Avg Reward: 236.87 Avg Score: 3.00
-
-[Stage 3/3] advanced Progress: 1025/2500 (41.0%) Win Rate: 0.00 Avg Reward: 237.40 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1050/2500 (42.0%) Win Rate: 0.00 Avg Reward: 237.47 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1075/2500 (43.0%) Win Rate: 0.00 Avg Reward: 241.35 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1100/2500 (44.0%) Win Rate: 0.00 Avg Reward: 241.02 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1125/2500 (45.0%) Win Rate: 0.00 Avg Reward: 241.03 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1150/2500 (46.0%) Win Rate: 0.00 Avg Reward: 241.77 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1175/2500 (47.0%) Win Rate: 0.00 Avg Reward: 240.13 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1200/2500 (48.0%) Win Rate: 0.00 Avg Reward: 241.34 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1225/2500 (49.0%) Win Rate: 0.00 Avg Reward: 239.70 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1250/2500 (50.0%) Win Rate: 0.00 Avg Reward: 237.04 Avg Score: 3.00
-
-[Stage 3/3] advanced Progress: 1275/2500 (51.0%) Win Rate: 0.00 Avg Reward: 235.46 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1300/2500 (52.0%) Win Rate: 0.00 Avg Reward: 236.54 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1325/2500 (53.0%) Win Rate: 0.00 Avg Reward: 236.01 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1350/2500 (54.0%) Win Rate: 0.00 Avg Reward: 238.40 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1375/2500 (55.0%) Win Rate: 0.00 Avg Reward: 239.31 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1400/2500 (56.0%) Win Rate: 0.00 Avg Reward: 239.07 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1425/2500 (57.0%) Win Rate: 0.00 Avg Reward: 238.60 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1450/2500 (58.0%) Win Rate: 0.00 Avg Reward: 236.44 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1475/2500 (59.0%) Win Rate: 0.00 Avg Reward: 236.88 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1500/2500 (60.0%) Win Rate: 0.00 Avg Reward: 234.69 Avg Score: 3.00
-
-[Stage 3/3] advanced Progress: 1525/2500 (61.0%) Win Rate: 0.00 Avg Reward: 236.79 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1550/2500 (62.0%) Win Rate: 0.00 Avg Reward: 236.16 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1575/2500 (63.0%) Win Rate: 0.00 Avg Reward: 236.01 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1600/2500 (64.0%) Win Rate: 0.00 Avg Reward: 238.42 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1625/2500 (65.0%) Win Rate: 0.00 Avg Reward: 237.93 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1650/2500 (66.0%) Win Rate: 0.00 Avg Reward: 237.57 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1675/2500 (67.0%) Win Rate: 0.00 Avg Reward: 237.91 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1700/2500 (68.0%) Win Rate: 0.00 Avg Reward: 237.87 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1725/2500 (69.0%) Win Rate: 0.00 Avg Reward: 237.90 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1750/2500 (70.0%) Win Rate: 0.00 Avg Reward: 239.46 Avg Score: 3.00
-
-[Stage 3/3] advanced Progress: 1775/2500 (71.0%) Win Rate: 0.00 Avg Reward: 238.88 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1800/2500 (72.0%) Win Rate: 0.00 Avg Reward: 239.57 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1825/2500 (73.0%) Win Rate: 0.00 Avg Reward: 240.37 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1850/2500 (74.0%) Win Rate: 0.00 Avg Reward: 241.12 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1875/2500 (75.0%) Win Rate: 0.00 Avg Reward: 242.13 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1900/2500 (76.0%) Win Rate: 0.00 Avg Reward: 238.84 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1925/2500 (77.0%) Win Rate: 0.00 Avg Reward: 239.74 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1950/2500 (78.0%) Win Rate: 0.00 Avg Reward: 239.24 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 1975/2500 (79.0%) Win Rate: 0.00 Avg Reward: 236.47 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2000/2500 (80.0%) Win Rate: 0.00 Avg Reward: 239.09 Avg Score: 3.00
-
-[Stage 3/3] advanced Progress: 2025/2500 (81.0%) Win Rate: 0.00 Avg Reward: 237.58 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2050/2500 (82.0%) Win Rate: 0.00 Avg Reward: 236.00 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2075/2500 (83.0%) Win Rate: 0.00 Avg Reward: 236.27 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2100/2500 (84.0%) Win Rate: 0.00 Avg Reward: 236.04 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2125/2500 (85.0%) Win Rate: 0.00 Avg Reward: 234.98 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2150/2500 (86.0%) Win Rate: 0.00 Avg Reward: 234.87 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2175/2500 (87.0%) Win Rate: 0.00 Avg Reward: 237.59 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2200/2500 (88.0%) Win Rate: 0.00 Avg Reward: 236.82 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2225/2500 (89.0%) Win Rate: 0.00 Avg Reward: 239.00 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2250/2500 (90.0%) Win Rate: 0.00 Avg Reward: 241.60 Avg Score: 3.00
-
-[Stage 3/3] advanced Progress: 2275/2500 (91.0%) Win Rate: 0.00 Avg Reward: 240.46 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2300/2500 (92.0%) Win Rate: 0.00 Avg Reward: 240.59 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2325/2500 (93.0%) Win Rate: 0.00 Avg Reward: 239.92 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2350/2500 (94.0%) Win Rate: 0.00 Avg Reward: 239.20 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2375/2500 (95.0%) Win Rate: 0.00 Avg Reward: 238.64 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2400/2500 (96.0%) Win Rate: 0.00 Avg Reward: 238.97 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2425/2500 (97.0%) Win Rate: 0.00 Avg Reward: 238.40 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2450/2500 (98.0%) Win Rate: 0.00 Avg Reward: 237.54 Avg Score: 3.00
-[Stage 3/3] advanced Progress: 2475/2500 (99.0%) Win Rate: 0.00 Avg Reward: 237.10 Avg Score: 3.00
-================================================================================
-Training completed in 192.82 seconds
-================================================================================
-
-Training completed in 192.84 seconds
+Training completed in 1.40 seconds
 Model saved to hrl\checkpoints\final_model.pth
 
 To visualize training metrics, run:

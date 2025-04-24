@@ -1,0 +1,40 @@
+{
+  "episode": [
+    1
+  ],
+  "step": [],
+  "timestamp": [],
+  "win_rate": [
+    0.0
+  ],
+  "score": [],
+  "flag_captures": [],
+  "tags": [],
+  "deaths": [],
+  "option_usage": {},
+  "option_success": {},
+  "episode_length": [
+    500.0
+  ],
+  "rewards": [],
+  "q_values": [],
+  "advantages": [],
+  "stage": [
+    {
+      "name": "expert",
+      "difficulty": 1.0,
+      "duration": 0.1,
+      "opponent_strategies": {
+        "defensive": 0.2,
+        "aggressive": 0.3,
+        "coordinated": 0.5
+      }
+    }
+  ],
+  "avg_reward": [
+    183.03341407992855
+  ],
+  "avg_score": [
+    0.0
+  ]
+}

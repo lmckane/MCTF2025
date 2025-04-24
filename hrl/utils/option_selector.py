@@ -1,10 +1,19 @@
+"""
+PRIMARY OPTION SELECTOR IMPLEMENTATION
+This is the canonical implementation of the OptionSelector to be used throughout the codebase.
+This version uses a neural network with role-based coordination for option selection.
+
+Other implementations in option_selection.py and policies/option_selector.py are deprecated
+and should be refactored to use this implementation.
+"""
+
 import numpy as np
 from typing import Dict, Any, List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from hrl.utils.state_processor import ProcessedState
-from hrl.policies.hierarchical_policy import Experience
+from hrl.utils.experience import Experience
 from hrl.utils.team_coordinator import AgentRole
 
 class OptionSelector:
@@ -14,7 +23,7 @@ class OptionSelector:
         """Initialize the option selector."""
         self.config = config
         # Extended state size to include role and coordination data
-        self.state_size = 16  # Position[2], velocity[2], flags[1], tags[1], health[1], team[1], role[1], recommended_target[2], flag_threats[3], enemy_distance[1], team_spread[1]
+        self.state_size = 21  # Updated from 16 to match actual input dimensions
         self.num_options = len(config['options'])
         self.hidden_size = config.get('hidden_size', 128)
         self.learning_rate = config.get('learning_rate', 1e-4)
@@ -51,29 +60,37 @@ class OptionSelector:
                     print("Warning: State missing agent_positions, using default option")
                 return self.config['options'][0]  # Default to first option
                 
-            # Get agent role (default to ATTACKER if not available)
+            # Preprocessing for role-specific behavior
+            available_options = self.config['options']
+            
+            has_recommended_target = hasattr(state, 'recommended_target') and state.recommended_target is not None and len(state.recommended_target) >= 2
+            
+            # Determine agent role and target distance
             agent_role = int(state.agent_roles[0]) if hasattr(state, 'agent_roles') and len(state.agent_roles) > 0 else AgentRole.ATTACKER.value
             
-            # Get distance to recommended target
-            has_recommended_target = hasattr(state, 'recommended_target') and len(state.recommended_target) == 2
-            if has_recommended_target:
-                target_distance = np.linalg.norm(state.agent_positions[0] - state.recommended_target)
-            else:
-                target_distance = 0.0
-                
-            # Get team spread - measure how spread out our team is
+            # Calculate distances for coordination
+            target_distance = 0.0
             team_spread = 0.0
-            team_agents = []
-            if len(state.agent_positions) > 1:
-                for i in range(len(state.agent_positions)):
-                    if i > 0 and state.agent_teams[i] == state.agent_teams[0]:  # Same team as our agent
-                        team_agents.append(state.agent_positions[i])
+            
+            if has_recommended_target:
+                # Calculate distance to recommended target
+                agent_pos = np.array([state.agent_positions[0][0], state.agent_positions[0][1]])
+                target_pos = np.array([state.recommended_target[0], state.recommended_target[1]])
+                target_distance = np.linalg.norm(target_pos - agent_pos)
+            
+            # Calculate team spread (distance between team agents)
+            if hasattr(state, 'agent_teams') and hasattr(state, 'agent_positions'):
+                team_agents = []
+                for i in range(len(state.agent_teams)):
+                    if state.agent_teams[i] == state.agent_teams[0]:  # Same team
+                        team_agents.append(np.array([state.agent_positions[i][0], state.agent_positions[i][1]]))
                 
-                if team_agents:
-                    distances = []
-                    for pos in team_agents:
-                        distances.append(np.linalg.norm(state.agent_positions[0] - pos))
-                    team_spread = np.mean(distances) if distances else 0.0
+                if len(team_agents) > 1:
+                    dists = []
+                    for i in range(len(team_agents)):
+                        for j in range(i+1, len(team_agents)):
+                            dists.append(np.linalg.norm(team_agents[i] - team_agents[j]))
+                    team_spread = np.mean(dists) if dists else 0.0
             
             # Get distance to nearest enemy and check if enemies are tagged
             enemy_distance = 1.0  # Default to normalized max distance
@@ -104,227 +121,144 @@ class OptionSelector:
             position_danger = getattr(state, 'position_danger', 0.0)
             
             # Create input tensor with enhanced coordination features
-            state_tensor = torch.tensor([
-                # Basic agent features
-                state.agent_positions[0][0], state.agent_positions[0][1],
-                state.agent_velocities[0][0], state.agent_velocities[0][1],
-                float(state.agent_flags[0]),
-                float(state.agent_tags[0]),
-                state.agent_health[0],
-                float(state.agent_teams[0]),
+            # Ensure all values are properly converted to scalars when needed
+            input_features = []
+            
+            # Basic agent features
+            try:
+                # Extract and ensure all values are scalars
+                pos_x = self._safe_scalar(state.agent_positions[0][0])
+                pos_y = self._safe_scalar(state.agent_positions[0][1])
+                vel_x = self._safe_scalar(state.agent_velocities[0][0])
+                vel_y = self._safe_scalar(state.agent_velocities[0][1])
+                
+                input_features.extend([
+                    pos_x, pos_y,
+                    vel_x, vel_y,
+                    self._safe_scalar(state.agent_flags[0]),
+                    self._safe_scalar(state.agent_tags[0]),
+                    self._safe_scalar(state.agent_health[0]),
+                    self._safe_scalar(state.agent_teams[0])
+                ])
+                
+                # Make sure agent_role is also safely converted if it's an array
+                agent_role = self._safe_scalar(state.agent_roles[0])
+                
                 # Role and coordination features
-                float(agent_role),
-                target_distance,
-                state.recommended_target[0] if has_recommended_target else 0.0,
-                state.recommended_target[1] if has_recommended_target else 0.0,
-                float(state.our_flag_threat) if hasattr(state, 'our_flag_threat') else 0.0,
-                float(state.our_flag_captured) if hasattr(state, 'our_flag_captured') else 0.0,
-                float(state.enemy_flag_captured) if hasattr(state, 'enemy_flag_captured') else 0.0,
-                team_spread
-            ], dtype=torch.float32).unsqueeze(0)
-            
-            # Get option scores from network
-            option_scores = self.network(state_tensor)
-            
-            # Apply role-specific weights if available
-            if agent_role in self.role_option_weights:
-                role_weights = torch.tensor([self.role_option_weights[agent_role][option] 
-                                          for option in self.config['options']])
-                option_scores = option_scores * role_weights.unsqueeze(0)
-            
-            # Apply general option weights
-            option_weights_tensor = torch.tensor([self.option_weights[option] for option in self.config['options']])
-            weighted_scores = option_scores * option_weights_tensor.unsqueeze(0)
-            
-            # Apply counter-strategy adjustments based on opponent modeling
-            if counter_strategy == "evasive":
-                # Increase priority for return_to_base and decrease for aggressive options
-                if position_danger > 0.5:  # High danger area
-                    return_option_idx = self.config['options'].index('return_to_base') if 'return_to_base' in self.config['options'] else None
-                    if return_option_idx is not None:
-                        weighted_scores[0, return_option_idx] *= 2.0
+                input_features.append(agent_role)
+                
+                # Safely handle target distance
+                if has_recommended_target:
+                    target_dist = self._safe_scalar(target_distance)
+                    input_features.append(target_dist)
+                else:
+                    input_features.append(0.0)
+                
+                # Safely handle recommended target position
+                if has_recommended_target:
+                    rec_x = self._safe_scalar(state.recommended_target[0])
+                    rec_y = self._safe_scalar(state.recommended_target[1])
+                    input_features.extend([rec_x, rec_y])
+                else:
+                    input_features.extend([0.0, 0.0])
+                    
+                # Additional flags and metrics - ensure they're all scalars
+                our_flag_threat = self._safe_scalar(state.our_flag_threat) if hasattr(state, 'our_flag_threat') else 0.0
+                our_flag_captured = self._safe_scalar(state.our_flag_captured) if hasattr(state, 'our_flag_captured') else 0.0
+                enemy_flag_captured = self._safe_scalar(state.enemy_flag_captured) if hasattr(state, 'enemy_flag_captured') else 0.0
+                team_spread_val = self._safe_scalar(team_spread)
+                
+                input_features.append(our_flag_threat)
+                input_features.append(our_flag_captured)
+                input_features.append(enemy_flag_captured)
+                input_features.append(team_spread_val)
+                
+                # Add team spread (duplicate - keeping for compatibility)
+                input_features.append(team_spread_val)
+                
+                # Add nearest enemy if available
+                nearest_enemy_dist = 1000.0  # Default large value
+                nearest_enemy_tagged = 0.0
+                
+                if hasattr(state, 'enemy_positions') and len(state.enemy_positions) > 0:
+                    # Find nearest enemy
+                    agent_pos = np.array([pos_x, pos_y])
+                    enemy_dists = []
+                    
+                    for i in range(len(state.enemy_positions)):
+                        try:
+                            enemy_pos = np.array([
+                                self._safe_scalar(state.enemy_positions[i][0]),
+                                self._safe_scalar(state.enemy_positions[i][1])
+                            ])
+                            dist = np.linalg.norm(agent_pos - enemy_pos)
+                            enemy_dists.append((dist, i))
+                        except Exception as e:
+                            if self.debug_level >= 2:
+                                print(f"Error processing enemy position {i}: {e}")
+                            continue
+                    
+                    if enemy_dists:
+                        enemy_dists.sort()
+                        nearest_enemy_dist = float(enemy_dists[0][0])
+                        enemy_idx = enemy_dists[0][1]
                         
-                    # Reduce aggressive options
-                    for option in ['tag_enemy', 'attack_enemy']:
-                        if option in self.config['options']:
-                            option_idx = self.config['options'].index(option)
-                            weighted_scores[0, option_idx] *= 0.5
-                            
-            elif counter_strategy == "flanking":
-                # When counter-strategy is flanking, prioritize capture_flag and maneuverability
-                capture_option_idx = self.config['options'].index('capture_flag') if 'capture_flag' in self.config['options'] else None
-                if capture_option_idx is not None:
-                    weighted_scores[0, capture_option_idx] *= 1.5
-                    
-            elif counter_strategy == "intercept":
-                # Prioritize interception and tag_enemy
-                intercept_option_idx = self.config['options'].index('intercept') if 'intercept' in self.config['options'] else None
-                tag_option_idx = self.config['options'].index('tag_enemy') if 'tag_enemy' in self.config['options'] else None
+                        # Check if enemy is tagged
+                        if hasattr(state, 'enemy_tags') and len(state.enemy_tags) > enemy_idx:
+                            enemy_tag = self._safe_scalar(state.enemy_tags[enemy_idx])
+                            nearest_enemy_tagged = float(enemy_tag)
                 
-                if intercept_option_idx is not None:
-                    weighted_scores[0, intercept_option_idx] *= 1.7
-                if tag_option_idx is not None:
-                    weighted_scores[0, tag_option_idx] *= 1.3
-                    
-            elif counter_strategy == "defensive":
-                # Prioritize defending base and territory control
-                defend_option_idx = self.config['options'].index('defend_base') if 'defend_base' in self.config['options'] else None
+                input_features.append(nearest_enemy_dist)
+                input_features.append(nearest_enemy_tagged)
                 
-                if defend_option_idx is not None:
-                    weighted_scores[0, defend_option_idx] *= 1.5
-                    
-            elif counter_strategy == "disrupt":
-                # Disrupt coordinated teams by focusing on tagging and flag possession
-                tag_option_idx = self.config['options'].index('tag_enemy') if 'tag_enemy' in self.config['options'] else None
-                capture_option_idx = self.config['options'].index('capture_flag') if 'capture_flag' in self.config['options'] else None
-                
-                if tag_option_idx is not None:
-                    weighted_scores[0, tag_option_idx] *= 1.4
-                if capture_option_idx is not None:
-                    weighted_scores[0, capture_option_idx] *= 1.3
-            
-            # Strategic decision enhancements based on game state
-            
-            # 1. Flag carrier strategy
-            if hasattr(state, 'agent_flags') and state.agent_flags[0] > 0:
-                # If agent has flag, prioritize returning to base and evasion
-                return_option_idx = self.config['options'].index('return_to_base') if 'return_to_base' in self.config['options'] else None
-                
-                # The closer to enemy, the more we prioritize returning to base
-                if return_option_idx is not None:
-                    enemy_proximity_factor = max(1.0, 2.0 / (enemy_distance + 0.1))  # Higher when enemies are close
-                    weighted_scores[0, return_option_idx] *= 2.0 * enemy_proximity_factor
-                
-                # Deprioritize aggressive options when carrying flag
-                for option in ['attack_enemy', 'tag_enemy', 'capture_flag']:
-                    if option in self.config['options']:
-                        option_idx = self.config['options'].index(option)
-                        weighted_scores[0, option_idx] *= 0.3  # Greatly reduce aggressive behavior
-            
-            # 2. Role-specific strategic adjustments
-            elif agent_role == AgentRole.DEFENDER.value:
-                # Check if our flag is being threatened
-                flag_under_threat = hasattr(state, 'our_flag_threat') and state.our_flag_threat > 0.5
-                flag_captured = hasattr(state, 'our_flag_captured') and state.our_flag_captured
-                
-                # Defenders prioritize different options based on threat levels
-                defend_option_idx = self.config['options'].index('defend_base') if 'defend_base' in self.config['options'] else None
-                intercept_option_idx = self.config['options'].index('intercept') if 'intercept' in self.config['options'] else None
-                
-                if flag_captured:
-                    # Flag is captured - prioritize intercepting enemy carrier
-                    if intercept_option_idx is not None:
-                        weighted_scores[0, intercept_option_idx] *= 3.0  # Strongly boost intercept
-                elif flag_under_threat:
-                    # Flag is under threat - switch between defending and intercepting
-                    if defend_option_idx is not None:
-                        weighted_scores[0, defend_option_idx] *= 2.0  # Boost defense
-                    if intercept_option_idx is not None:
-                        weighted_scores[0, intercept_option_idx] *= 1.5  # Moderately boost intercept
+                # Add game context information if available
+                if hasattr(state, 'time_remaining'):
+                    time_remaining = self._safe_scalar(state.time_remaining)
+                    input_features.append(time_remaining)
                 else:
-                    # No immediate threat - patrol and defend
-                    if defend_option_idx is not None:
-                        weighted_scores[0, defend_option_idx] *= 1.5  # Moderate defense priority
-            
-            elif agent_role == AgentRole.INTERCEPTOR.value:
-                # Check for enemy threats
-                flag_captured = hasattr(state, 'our_flag_captured') and state.our_flag_captured
+                    input_features.append(0.0)
                 
-                # Interceptors prioritize intercept, tag_enemy and strategic positioning
-                intercept_option_idx = self.config['options'].index('intercept') if 'intercept' in self.config['options'] else None
-                tag_option_idx = self.config['options'].index('tag_enemy') if 'tag_enemy' in self.config['options'] else None
-                
-                if flag_captured:
-                    # Enemy has our flag - maximum priority on interception
-                    if intercept_option_idx is not None:
-                        weighted_scores[0, intercept_option_idx] *= 4.0  # Critical priority
-                elif enemy_distance < 0.3:  # Enemy is close
-                    # Close enemy - prioritize tagging
-                    if tag_option_idx is not None:
-                        weighted_scores[0, tag_option_idx] *= 2.5  # High priority on tagging
+                if hasattr(state, 'score_diff'):
+                    score_diff = self._safe_scalar(state.score_diff)
+                    input_features.append(score_diff)
                 else:
-                    # No immediate threats - balance between interception and tagging
-                    if intercept_option_idx is not None:
-                        weighted_scores[0, intercept_option_idx] *= 1.5
-                    if tag_option_idx is not None:
-                        weighted_scores[0, tag_option_idx] *= 1.5
-                        
-                # Strategic consideration: if many enemies are already tagged, focus on other priorities
-                if total_enemies > 0 and tagged_enemies / total_enemies > 0.5:
-                    # Most enemies are tagged, consider helping with attack or defense
-                    capture_option_idx = self.config['options'].index('capture_flag') if 'capture_flag' in self.config['options'] else None
-                    if capture_option_idx is not None:
-                        weighted_scores[0, capture_option_idx] *= 1.3  # Moderately boost attacking
-            
-            elif agent_role == AgentRole.ATTACKER.value:
-                # Attackers focus on flag capture but with strategic considerations
-                enemy_flag_captured = hasattr(state, 'enemy_flag_captured') and state.enemy_flag_captured
+                    input_features.append(0.0)
                 
-                # Different strategies based on flag status
-                capture_option_idx = self.config['options'].index('capture_flag') if 'capture_flag' in self.config['options'] else None
-                tag_option_idx = self.config['options'].index('tag_enemy') if 'tag_enemy' in self.config['options'] else None
+                # Convert to tensor for model input
+                input_tensor = self._safe_tensor_creation(input_features)
                 
-                if enemy_flag_captured:
-                    # Another team member has the flag - provide tactical support
-                    if tag_option_idx is not None:
-                        weighted_scores[0, tag_option_idx] *= 1.8  # Prioritize clearing path for flag carrier
-                else:
-                    # Flag not captured yet - focus on capturing with situational awareness
-                    if capture_option_idx is not None:
-                        # Scale capture priority based on proximity to flag (closer = higher priority)
-                        proximity_factor = 1.0 + max(0, 1.0 - enemy_flag_distance) * 2.0
-                        weighted_scores[0, capture_option_idx] *= 1.8 * proximity_factor
+                # Get model predictions
+                outputs = self._safe_forward(input_tensor)
+                if outputs is None:
+                    return self.config['options'][0]  # Default to first option if error
                     
-                    # If enemy is very close, consider tagging first before resuming capture
-                    if enemy_distance < 0.15 and tag_option_idx is not None:
-                        weighted_scores[0, tag_option_idx] *= 1.5  # Moderately boost tagging when enemy very close
-            
-            # 3. Team formation considerations
-            team_roles_count = {AgentRole.ATTACKER.value: 0, AgentRole.DEFENDER.value: 0, AgentRole.INTERCEPTOR.value: 0}
-            if hasattr(state, 'agent_roles'):
-                for i in range(len(state.agent_roles)):
-                    if i > 0 and state.agent_teams[i] == state.agent_teams[0]:  # Same team
-                        role = int(state.agent_roles[i])
-                        if role in team_roles_count:
-                            team_roles_count[role] += 1
-            
-            # Encourage diversification if team is too concentrated in one role
-            max_role_count = max(team_roles_count.values()) if team_roles_count else 0
-            if max_role_count >= 2 and agent_role in team_roles_count and team_roles_count[agent_role] == max_role_count:
-                # This agent is in an overrepresented role - consider alternative options
-                if agent_role == AgentRole.ATTACKER.value:
-                    # Too many attackers, consider defensive play if needed
-                    if hasattr(state, 'our_flag_threat') and state.our_flag_threat > 0.3:
-                        defend_option_idx = self.config['options'].index('defend_base') if 'defend_base' in self.config['options'] else None
-                        if defend_option_idx is not None:
-                            weighted_scores[0, defend_option_idx] *= 1.2  # Slightly boost defense
+                # Apply role-based weights and filtering
+                weighted_outputs = outputs[0].clone()
                 
-                elif agent_role == AgentRole.DEFENDER.value:
-                    # Too many defenders, consider attack if safe
-                    if not (hasattr(state, 'our_flag_threat') and state.our_flag_threat > 0.3):
-                        capture_option_idx = self.config['options'].index('capture_flag') if 'capture_flag' in self.config['options'] else None
-                        if capture_option_idx is not None:
-                            weighted_scores[0, capture_option_idx] *= 1.2  # Slightly boost attack
-            
-            # Print debug info occasionally
-            if self.debug_level >= 2 and np.random.random() < 0.005:  # 0.5% chance to print debug info
-                print("\nEnhanced Option Selection Debug:")
-                print(f"  Agent role: {AgentRole(agent_role).name if agent_role in [r.value for r in AgentRole] else 'UNKNOWN'}")
-                print(f"  Flag status: has_flag={state.agent_flags[0]}, our_flag_captured={state.our_flag_captured if hasattr(state, 'our_flag_captured') else 'N/A'}")
-                print(f"  Threat level: {state.our_flag_threat if hasattr(state, 'our_flag_threat') else 'N/A'}")
-                print(f"  Counter strategy: {counter_strategy}, Position danger: {position_danger:.2f}")
-                print(f"  Distances: enemy={enemy_distance:.2f}, enemy_flag={enemy_flag_distance:.2f}, our_flag={our_flag_distance:.2f}")
-                print("  Option scores:")
-                for i, option in enumerate(self.config['options']):
-                    role_weight = self.role_option_weights[agent_role][option] if agent_role in self.role_option_weights else 1.0
-                    print(f"    {option}: raw={option_scores[0][i].item():.2f}, role_weight={role_weight:.2f}, "
-                          f"general_weight={self.option_weights[option]:.2f}, final={weighted_scores[0][i].item():.2f}")
-            
-            # Select option with highest score
-            option_idx = torch.argmax(weighted_scores).item()
-            selected_option = self.config['options'][option_idx]
-            
-            return selected_option
+                # Adjust outputs based on agent role
+                for option_idx, option_name in enumerate(self.config['options']):
+                    role_weight = self._get_role_weight(agent_role, option_name)
+                    weighted_outputs[option_idx] *= role_weight
+                    
+                    # Apply conditional filters
+                    if not self._check_option_conditions(agent_role, option_name, state):
+                        weighted_outputs[option_idx] = -float('inf')  # Effectively disable this option
+                
+                # Filter to only available options
+                available_indices = [self.config['options'].index(option) for option in available_options]
+                for i in range(len(weighted_outputs)):
+                    if i not in available_indices:
+                        weighted_outputs[i] = -float('inf')
+                
+                # Select based on highest weighted score
+                selected_idx = torch.argmax(weighted_outputs).item()
+                selected_option = self.config['options'][selected_idx]
+                
+                return selected_option
+            except Exception as e:
+                if self.debug_level >= 1:
+                    print(f"Error in enhanced select_option: {e}")
+                return self.config['options'][0]  # Default to first option if error occurs
         except Exception as e:
             if self.debug_level >= 1:
                 print(f"Error in enhanced select_option: {e}")
@@ -425,48 +359,101 @@ class OptionSelector:
         
     def process_state(self, state: ProcessedState) -> torch.Tensor:
         """Convert processed state to tensor with team coordination features."""
-        # Extract relevant features
-        features = []
-        
-        # Add agent features
-        features.extend(state.agent_positions.flatten())  # Shape: (num_agents * 2,)
-        features.extend(state.agent_velocities.flatten())  # Shape: (num_agents * 2,)
-        features.extend(state.agent_flags)  # Shape: (num_agents,)
-        features.extend(state.agent_tags)  # Shape: (num_agents,)
-        features.extend(state.agent_teams)  # Shape: (num_agents,)
-        features.extend(state.agent_health)  # Shape: (num_agents,)
-        
-        # Add coordination features if available
-        if hasattr(state, 'agent_roles'):
-            features.extend(state.agent_roles)  # Shape: (num_agents,)
-        
-        if hasattr(state, 'recommended_target'):
-            features.extend(state.recommended_target)  # Shape: (2,)
+        try:
+            # Extract relevant features
+            features = []
             
-        if hasattr(state, 'our_flag_threat'):
-            features.append(state.our_flag_threat)  # Shape: (1,)
+            # Add agent features (safely)
+            if hasattr(state, 'agent_positions') and len(state.agent_positions) > 0:
+                features.extend(state.agent_positions.flatten())  # Shape: (num_agents * 2,)
+            else:
+                features.extend([0.0, 0.0])  # Default positions
+                
+            if hasattr(state, 'agent_velocities') and len(state.agent_velocities) > 0:
+                features.extend(state.agent_velocities.flatten())  # Shape: (num_agents * 2,)
+            else:
+                features.extend([0.0, 0.0])  # Default velocities
+                
+            # Add other agent features with safe access
+            for attr in ['agent_flags', 'agent_tags', 'agent_teams', 'agent_health']:
+                if hasattr(state, attr) and len(getattr(state, attr)) > 0:
+                    features.extend(getattr(state, attr))
+                else:
+                    features.append(0.0)  # Default value
             
-        if hasattr(state, 'our_flag_captured'):
-            features.append(float(state.our_flag_captured))  # Shape: (1,)
+            # Add coordination features if available
+            if hasattr(state, 'agent_roles') and len(state.agent_roles) > 0:
+                features.extend(state.agent_roles)  # Shape: (num_agents,)
+            else:
+                features.append(0.0)  # Default role
             
-        if hasattr(state, 'enemy_flag_captured'):
-            features.append(float(state.enemy_flag_captured))  # Shape: (1,)
-        
-        # Add flag features
-        features.extend(state.flag_positions.flatten())  # Shape: (num_flags * 2,)
-        features.extend(state.flag_captured)  # Shape: (num_flags,)
-        features.extend(state.flag_teams)  # Shape: (num_flags,)
-        
-        # Add base positions
-        features.extend(state.base_positions.flatten())  # Shape: (num_teams * 2,)
-        
-        # Add game state
-        features.append(state.step_count / 1000.0)  # Normalize step count
-        features.append(state.game_state)
-        
-        # Convert to tensor
-        state_tensor = torch.FloatTensor(features).unsqueeze(0)
-        return state_tensor
+            if hasattr(state, 'recommended_target') and len(state.recommended_target) >= 2:
+                features.extend(state.recommended_target[:2])  # Shape: (2,)
+            else:
+                features.extend([0.0, 0.0])  # Default target
+                
+            # Add flag threat states
+            for attr in ['our_flag_threat', 'our_flag_captured', 'enemy_flag_captured']:
+                if hasattr(state, attr):
+                    val = getattr(state, attr)
+                    if isinstance(val, np.ndarray) and val.size > 0:
+                        features.append(float(val.item()))
+                    else:
+                        features.append(float(val))
+                else:
+                    features.append(0.0)
+            
+            # Add flag features
+            if hasattr(state, 'flag_positions') and len(state.flag_positions) > 0:
+                features.extend(state.flag_positions.flatten()[:4])  # Limit to prevent over-extension
+            else:
+                features.extend([0.0, 0.0, 0.0, 0.0])  # Default flag positions
+                
+            if hasattr(state, 'flag_captured') and len(state.flag_captured) > 0:
+                features.extend(state.flag_captured[:2])  # Limit to prevent over-extension
+            else:
+                features.extend([0.0, 0.0])  # Default flag capture states
+                
+            if hasattr(state, 'flag_teams') and len(state.flag_teams) > 0:
+                features.extend(state.flag_teams[:2])  # Limit to prevent over-extension
+            else:
+                features.extend([0.0, 0.0])  # Default flag teams
+            
+            # Add base positions
+            if hasattr(state, 'base_positions') and len(state.base_positions) > 0:
+                features.extend(state.base_positions.flatten()[:4])  # Limit to prevent over-extension
+            else:
+                features.extend([0.0, 0.0, 0.0, 0.0])  # Default base positions
+            
+            # Add game state
+            if hasattr(state, 'step_count'):
+                features.append(state.step_count / 1000.0)  # Normalize step count
+            else:
+                features.append(0.0)
+                
+            if hasattr(state, 'game_state'):
+                features.append(float(state.game_state))
+            else:
+                features.append(0.0)
+            
+            # Convert to tensor and ensure it has the right size
+            state_tensor = torch.FloatTensor(features).unsqueeze(0)
+            
+            # Pad or truncate to match expected network input size
+            if state_tensor.shape[1] < self.state_size:
+                # Pad with zeros
+                padding = torch.zeros(state_tensor.shape[0], self.state_size - state_tensor.shape[1])
+                state_tensor = torch.cat([state_tensor, padding], dim=1)
+            elif state_tensor.shape[1] > self.state_size:
+                # Truncate
+                state_tensor = state_tensor[:, :self.state_size]
+                
+            return state_tensor
+        except Exception as e:
+            if self.debug_level >= 1:
+                print(f"Error in process_state: {e}")
+            # Return zero tensor of the expected size
+            return torch.zeros(1, self.state_size)
         
     def update(self, state: Dict[str, Any], reward: float, done: bool):
         """Update option selector based on reward."""
@@ -477,22 +464,43 @@ class OptionSelector:
     def train(self, states: List[Dict[str, Any]], 
              options: List[int], rewards: List[float]):
         """Train the option selector network."""
-        # Convert states to tensors
-        state_tensors = torch.stack([self.process_state(state) for state in states])
-        option_tensors = torch.LongTensor(options)
-        reward_tensors = torch.FloatTensor(rewards)
-        
-        # Get option scores
-        option_scores = self.network(state_tensors)
-        
-        # Calculate loss (cross entropy with reward weighting)
-        loss = F.cross_entropy(option_scores, option_tensors, reduction='none')
-        loss = (loss * reward_tensors).mean()
-        
-        # Update network
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+        try:
+            # Convert states to tensors
+            state_tensors = []
+            for state in states:
+                tensor = self.process_state(state)
+                # Check if tensor needs resizing
+                if tensor.shape[1] != self.state_size:
+                    if tensor.shape[1] < self.state_size:
+                        # Pad with zeros
+                        padding = torch.zeros(tensor.shape[0], self.state_size - tensor.shape[1])
+                        tensor = torch.cat([tensor, padding], dim=1)
+                    else:
+                        # Truncate
+                        tensor = tensor[:, :self.state_size]
+                state_tensors.append(tensor)
+            
+            if not state_tensors:
+                return  # No data to train on
+                
+            state_tensors = torch.cat(state_tensors)
+            option_tensors = torch.LongTensor(options)
+            reward_tensors = torch.FloatTensor(rewards)
+            
+            # Get option scores
+            option_scores = self.network(state_tensors)
+            
+            # Calculate loss (cross entropy with reward weighting)
+            loss = F.cross_entropy(option_scores, option_tensors, reduction='none')
+            loss = (loss * reward_tensors).mean()
+            
+            # Update network
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+        except Exception as e:
+            if self.debug_level >= 1:
+                print(f"Error in train method: {e}")
         
     def state_dict(self) -> Dict[str, Any]:
         """Get state dictionary for saving."""
@@ -513,3 +521,157 @@ class OptionSelector:
             self.debug_level = state_dict['debug_level']
         if 'role_option_weights' in state_dict:
             self.role_option_weights = state_dict['role_option_weights'] 
+
+    def _get_role_weight(self, agent_role, option_name):
+        """Get the weight for this option based on agent role"""
+        if not hasattr(self, 'role_option_weights'):
+            return 1.0
+        
+        # Convert agent_role to int using our safe method
+        try:
+            agent_role = int(self._safe_scalar(agent_role))
+        except:
+            agent_role = AgentRole.ATTACKER.value  # Default to attacker if conversion fails
+        
+        # If role doesn't exist in weights, use default weights
+        if agent_role not in self.role_option_weights:
+            return 1.0
+            
+        # Return the weight for this option
+        return self.role_option_weights[agent_role].get(option_name, 1.0)
+    
+    def _check_option_conditions(self, agent_role, option_name, state):
+        """Check if this option should be available based on role and state conditions"""
+        # Convert agent_role to int using our safe method
+        try:
+            agent_role = int(self._safe_scalar(agent_role))
+        except:
+            agent_role = AgentRole.ATTACKER.value  # Default to attacker if conversion fails
+            
+        # Default conditions for common options
+        if option_name == 'capture_flag':
+            # Don't capture if already have flag
+            if hasattr(state, 'agent_flags') and len(state.agent_flags) > 0:
+                try:
+                    agent_has_flag = self._safe_scalar(state.agent_flags[0])
+                    if agent_has_flag > 0:
+                        return False
+                except:
+                    pass  # On error, proceed with default behavior
+                    
+        elif option_name == 'return_to_base':
+            # Only return to base if have flag or badly damaged
+            if hasattr(state, 'agent_flags') and len(state.agent_flags) > 0:
+                try:
+                    agent_has_flag = self._safe_scalar(state.agent_flags[0])
+                    if agent_has_flag <= 0:
+                        # Check if agent is damaged
+                        if hasattr(state, 'agent_health') and len(state.agent_health) > 0:
+                            health = self._safe_scalar(state.agent_health[0])
+                            if health > 0.4:  # Not badly damaged
+                                return False
+                except:
+                    pass  # On error, proceed with default behavior
+            
+        elif option_name == 'defend_base':
+            # Only defenders should defend base unless special circumstances
+            if agent_role != AgentRole.DEFENDER.value:
+                # Non-defenders can defend if flag is under high threat
+                if hasattr(state, 'our_flag_threat'):
+                    try:
+                        flag_threat = self._safe_scalar(state.our_flag_threat)
+                        if flag_threat < 0.7:  # Not high threat
+                            return False
+                    except:
+                        pass  # On error, proceed with default behavior
+        
+        # All conditions passed
+        return True
+
+    def _safe_forward(self, input_tensor):
+        """
+        Safely perform forward pass through the network, handling shape mismatches.
+        
+        Args:
+            input_tensor: Input tensor for the network
+            
+        Returns:
+            Network output or None if error occurs
+        """
+        try:
+            with torch.no_grad():
+                if input_tensor.shape[1] != self.state_size:
+                    if self.debug_level >= 1:
+                        print(f"Input tensor shape mismatch: expected {self.state_size}, got {input_tensor.shape[1]}")
+                    
+                    # Pad or truncate the tensor to match expected size
+                    if input_tensor.shape[1] < self.state_size:
+                        # Pad with zeros
+                        padding = torch.zeros(input_tensor.shape[0], self.state_size - input_tensor.shape[1])
+                        input_tensor = torch.cat([input_tensor, padding], dim=1)
+                    else:
+                        # Truncate
+                        input_tensor = input_tensor[:, :self.state_size]
+                        
+                return self.network(input_tensor)
+        except Exception as e:
+            if self.debug_level >= 1:
+                print(f"Error in network forward pass: {e}")
+            return None 
+
+    def _safe_tensor_creation(self, features):
+        """
+        Safely create a tensor from a list of features, handling bad values.
+        
+        Args:
+            features: List of feature values
+            
+        Returns:
+            PyTorch tensor
+        """
+        try:
+            # Replace any invalid values with 0
+            clean_features = []
+            for val in features:
+                if isinstance(val, (int, float)) and not np.isnan(val) and not np.isinf(val):
+                    clean_features.append(float(val))
+                else:
+                    clean_features.append(0.0)
+                    
+            return torch.tensor(clean_features, dtype=torch.float32).unsqueeze(0)
+        except Exception as e:
+            if self.debug_level >= 1:
+                print(f"Error creating tensor: {e}")
+            # Return a zero tensor of the expected size
+            return torch.zeros(1, self.state_size)
+
+    def _safe_scalar(self, value):
+        """
+        Safely convert a numpy array, tensor, or other value to a Python scalar.
+        
+        Args:
+            value: Value to convert
+            
+        Returns:
+            Python scalar value
+        """
+        try:
+            if isinstance(value, np.ndarray):
+                if value.size == 1:
+                    return float(value.item())
+                else:
+                    # If array has multiple values, return the first one
+                    return float(value.flatten()[0])
+            elif isinstance(value, torch.Tensor):
+                if value.numel() == 1:
+                    return float(value.item())
+                else:
+                    return float(value.view(-1)[0].item())
+            elif isinstance(value, (int, float)):
+                return float(value)
+            else:
+                return float(value)
+        except Exception as e:
+            if self.debug_level >= 2:
+                print(f"Error in safe_scalar: {e}")
+            return 0.0 

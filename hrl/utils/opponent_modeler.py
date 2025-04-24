@@ -1,19 +1,21 @@
 import numpy as np
 from typing import Dict, List, Any, Tuple
-from enum import Enum
+from enum import Enum, auto
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from collections import defaultdict, deque
+import math
 
 
 class OpponentStrategy(Enum):
     """Possible opponent strategies."""
-    UNKNOWN = 0
-    AGGRESSIVE = 1  # Focuses on tagging
-    DEFENSIVE = 2   # Focuses on defending their flag
-    RUSHING = 3     # Rapidly goes for flag
-    FLANKING = 4    # Tries to approach from sides
-    COORDINATED = 5 # Shows team coordination
+    UNKNOWN = auto()
+    RANDOM = auto()
+    AGGRESSIVE = auto()
+    DEFENSIVE = auto()
+    FLAG_FOCUSED = auto()
+    COORDINATED = auto()
 
 
 class OpponentModeler:
@@ -36,11 +38,18 @@ class OpponentModeler:
         """
         self.config = config
         self.debug_level = config.get('debug_level', 1)
-        self.history_length = config.get('history_length', 20)  # Number of steps to track
+        self.history_length = config.get('history_length', 60)  # Number of steps to track
         
         # Track positions and actions of opponents
-        self.opponent_history = {}  # {agent_id: [positions_history]}
-        self.identified_strategies = {}  # {agent_id: OpponentStrategy}
+        self.position_history = [deque(maxlen=self.history_length) for _ in range(config.get('num_opponents', 10))]
+        self.approach_counts = [0] * config.get('num_opponents', 10)
+        self.flag_approach_counts = [0] * config.get('num_opponents', 10)
+        self.defense_counts = [0] * config.get('num_opponents', 10)
+        self.coordination_counts = [0] * config.get('num_opponents', 10)
+        self.identified_strategies = [OpponentStrategy.UNKNOWN] * config.get('num_opponents', 10)
+        self.strategy_confidence = [0.0] * config.get('num_opponents', 10)
+        self.danger_zones = []
+        self.update_counter = 0
         
         # Track team-level strategy
         self.team_strategy = {0: OpponentStrategy.UNKNOWN, 1: OpponentStrategy.UNKNOWN}
@@ -62,17 +71,25 @@ class OpponentModeler:
         
         # Counter-strategy suggestions
         self.counter_strategies = {
-            OpponentStrategy.AGGRESSIVE: "evasive",  # Evade aggressive opponents
-            OpponentStrategy.DEFENSIVE: "flanking",   # Flank defensive opponents
-            OpponentStrategy.RUSHING: "intercept",   # Intercept rushing opponents
-            OpponentStrategy.FLANKING: "defensive",  # Be defensive against flanking
-            OpponentStrategy.COORDINATED: "disrupt"  # Disrupt coordinated teams
+            OpponentStrategy.AGGRESSIVE: "defensive",
+            OpponentStrategy.DEFENSIVE: "flag_focused",
+            OpponentStrategy.FLAG_FOCUSED: "aggressive",
+            OpponentStrategy.COORDINATED: "split_and_distract"
         }
         
     def reset(self):
-        """Reset the modeler state for a new episode."""
-        self.opponent_history = {}
-        self.identified_strategies = {}
+        """Reset all tracking stats for a new episode"""
+        # Position history for each opponent
+        for i in range(len(self.position_history)):
+            self.position_history[i].clear()
+        self.approach_counts = [0] * len(self.position_history)
+        self.flag_approach_counts = [0] * len(self.position_history)
+        self.defense_counts = [0] * len(self.position_history)
+        self.coordination_counts = [0] * len(self.position_history)
+        self.identified_strategies = [OpponentStrategy.UNKNOWN] * len(self.position_history)
+        self.strategy_confidence = [0.0] * len(self.position_history)
+        self.danger_zones = []
+        self.update_counter = 0
         self.team_strategy = {0: OpponentStrategy.UNKNOWN, 1: OpponentStrategy.UNKNOWN}
         self.agent_stats = {}
         self.flag_capture_history = []
@@ -85,48 +102,45 @@ class OpponentModeler:
         Args:
             state: Current game state
         """
-        # Extract opponents (agents not on team 0)
-        opponents = [agent for agent in state['agents'] if agent['team'] != 0]
+        self.update_counter += 1
         
-        # Update position history for each opponent
-        for opponent in opponents:
-            agent_id = opponent['id']
-            position = np.array(opponent['position'])
-            velocity = np.array(opponent['velocity'])
-            is_tagged = opponent['is_tagged']
-            has_flag = opponent['has_flag']
+        # Extract relevant information from game state
+        opponent_positions = []
+        opponent_has_flags = []
+        our_positions = []
+        our_flag_position = None
+        enemy_flag_position = None
+        
+        # Get positions of all agents
+        for agent in state['agents']:
+            if agent['team'] == 1:  # Enemy team
+                opponent_positions.append(agent['position'])
+                opponent_has_flags.append(agent['has_flag'])
+            else:  # Our team
+                our_positions.append(agent['position'])
+                
+        # Get flag positions
+        for flag in state['flags']:
+            if flag['team'] == 0:  # Our flag
+                our_flag_position = flag['position']
+            else:  # Enemy flag
+                enemy_flag_position = flag['position']
+                
+        if not opponent_positions:
+            return  # No opponents to track
             
-            # Initialize history and stats if new opponent
-            if agent_id not in self.opponent_history:
-                self.opponent_history[agent_id] = []
-                self.agent_stats[agent_id] = {
-                    'aggressive_score': 0.0,
-                    'defensive_score': 0.0,
-                    'rushing_score': 0.0,
-                    'flanking_score': 0.0,
-                    'coordinated_score': 0.0,
-                    'tags_initiated': 0,
-                    'been_tagged': 0,
-                    'flag_captures': 0,
-                    'time_in_territory': 0,
-                    'territory_violations': 0
-                }
+        # Update position history
+        for i, pos in enumerate(opponent_positions):
+            if i < len(self.position_history):
+                self.position_history[i].append(pos)
             
-            # Record position and state
-            self.opponent_history[agent_id].append({
-                'position': position,
-                'velocity': velocity,
-                'is_tagged': is_tagged,
-                'has_flag': has_flag,
-                'step': state['step_count']
-            })
+        # Only update strategy analysis every 10 steps
+        if self.update_counter % 10 == 0:
+            self._analyze_strategies(opponent_positions, opponent_has_flags, 
+                                    our_positions, our_flag_position, enemy_flag_position)
             
-            # Limit history length
-            if len(self.opponent_history[agent_id]) > self.history_length:
-                self.opponent_history[agent_id].pop(0)
-            
-            # Update stats based on current state
-            self._update_agent_stats(agent_id, state)
+        # Update danger zones
+        self._update_danger_zones()
         
         # Identify strategies based on updated stats
         self._identify_strategies(state)
@@ -138,65 +152,44 @@ class OpponentModeler:
         if self.debug_level >= 2 and state['step_count'] % 50 == 0:
             self._print_strategy_debug()
             
-    def _update_agent_stats(self, agent_id: int, state: Dict[str, Any]):
-        """
-        Update statistics for an opponent agent.
-        
-        Args:
-            agent_id: ID of the agent
-            state: Current game state
-        """
-        # Get opponent info
-        opponent = next((a for a in state['agents'] if a['id'] == agent_id), None)
-        if not opponent:
+    def _analyze_strategies(self, opponent_positions, opponent_has_flags, 
+                           our_positions, our_flag_position, enemy_flag_position):
+        """Analyze opponent behaviors to identify strategies"""
+        # Skip if we don't have all the necessary information
+        if not opponent_positions or not our_positions or not our_flag_position or not enemy_flag_position:
             return
             
-        # Extract key information
-        position = np.array(opponent['position'])
-        team = opponent['team']
-        
-        # Get opponents' flag (our flag)
-        our_flag = next((f for f in state['flags'] if f['team'] == 0), None)
-        if our_flag:
-            our_flag_pos = np.array(our_flag['position'])
-            
-            # Check if opponent is near our flag
-            dist_to_our_flag = np.linalg.norm(position - our_flag_pos)
-            if dist_to_our_flag < 20:  # Close to our flag
-                self.agent_stats[agent_id]['rushing_score'] += 0.05
-            
-        # Get their flag
-        their_flag = next((f for f in state['flags'] if f['team'] == team), None)
-        if their_flag:
-            their_flag_pos = np.array(their_flag['position'])
-            
-            # Check if opponent is defending their flag
-            dist_to_their_flag = np.linalg.norm(position - their_flag_pos)
-            if dist_to_their_flag < 20:  # Close to their flag
-                self.agent_stats[agent_id]['defensive_score'] += 0.05
-        
-        # Check if in the middle of the map (flanking behavior)
-        map_size = np.array(state.get('map_size', [100, 100]))
-        map_center = map_size / 2
-        dist_to_center = np.linalg.norm(position - map_center)
-        if dist_to_center < 20:  # Near center - possible flanking behavior
-            self.agent_stats[agent_id]['flanking_score'] += 0.02
-        
-        # Territory analysis
-        if self._is_in_territory(position, 0, state):  # In our territory
-            self.agent_stats[agent_id]['territory_violations'] += 1
-            
-            # Aggressive behavior in our territory
-            self.agent_stats[agent_id]['aggressive_score'] += 0.03
-            
-        # Check for coordination with teammates
-        teammate_positions = [np.array(a['position']) for a in state['agents'] 
-                             if a['team'] == team and a['id'] != agent_id]
-        if teammate_positions:
-            avg_distance = np.mean([np.linalg.norm(position - tp) for tp in teammate_positions])
-            if avg_distance < 30:  # Close to teammates - possible coordination
-                self.agent_stats[agent_id]['coordinated_score'] += 0.04
+        # For each opponent
+        for i, pos in enumerate(opponent_positions):
+            if i >= len(self.position_history):
+                break
                 
+            # Check if opponent is approaching our agents
+            min_dist_to_our_agents = min(np.linalg.norm(np.array(pos) - np.array(our_pos)) 
+                                        for our_pos in our_positions)
+            if min_dist_to_our_agents < 5.0:  # Threshold for "approaching"
+                self.approach_counts[i] += 1
+                
+            # Check if opponent is approaching our flag
+            dist_to_our_flag = np.linalg.norm(np.array(pos) - np.array(our_flag_position))
+            if dist_to_our_flag < 8.0:  # Threshold for "approaching flag"
+                self.flag_approach_counts[i] += 1
+                
+            # Check if opponent is defending their flag
+            dist_to_their_flag = np.linalg.norm(np.array(pos) - np.array(enemy_flag_position))
+            if dist_to_their_flag < 10.0:  # Threshold for "defending"
+                self.defense_counts[i] += 1
+                
+            # Check for coordination with other opponents
+            for j, other_pos in enumerate(opponent_positions):
+                if i != j and j < len(self.position_history):
+                    dist_between = np.linalg.norm(np.array(pos) - np.array(other_pos))
+                    if dist_between < 12.0:  # Threshold for "coordinating"
+                        self.coordination_counts[i] += 1
+                        
+        # Identify strategies based on observed behaviors
+        self._identify_strategies()
+        
     def _identify_strategies(self, state: Dict[str, Any]):
         """
         Identify strategies for each opponent.
@@ -204,25 +197,38 @@ class OpponentModeler:
         Args:
             state: Current game state
         """
-        for agent_id, stats in self.agent_stats.items():
-            # Simple strategy identification using the highest score
-            strategy_scores = {
-                OpponentStrategy.AGGRESSIVE: stats['aggressive_score'],
-                OpponentStrategy.DEFENSIVE: stats['defensive_score'],
-                OpponentStrategy.RUSHING: stats['rushing_score'],
-                OpponentStrategy.FLANKING: stats['flanking_score'],
-                OpponentStrategy.COORDINATED: stats['coordinated_score']
-            }
+        for i in range(len(self.position_history)):
+            # Calculate behavior percentages
+            total_observations = max(1, self.update_counter // 10)
+            aggression_pct = self.approach_counts[i] / total_observations
+            flag_focus_pct = self.flag_approach_counts[i] / total_observations
+            defense_pct = self.defense_counts[i] / total_observations
+            coordination_pct = self.coordination_counts[i] / total_observations
             
-            # Find strategy with highest score
-            max_strategy = max(strategy_scores.items(), key=lambda x: x[1])
+            # Determine primary strategy
+            strategy = OpponentStrategy.UNKNOWN
+            confidence = 0.3  # Default confidence
             
-            # Only identify if score exceeds threshold
-            if max_strategy[1] > 1.0:  # Sufficient evidence for strategy
-                self.identified_strategies[agent_id] = max_strategy[0]
-            else:
-                self.identified_strategies[agent_id] = OpponentStrategy.UNKNOWN
+            if coordination_pct > 0.5 and (aggression_pct > 0.4 or flag_focus_pct > 0.4):
+                strategy = OpponentStrategy.COORDINATED
+                confidence = coordination_pct * 0.7 + max(aggression_pct, flag_focus_pct) * 0.3
+            elif aggression_pct > 0.6:
+                strategy = OpponentStrategy.AGGRESSIVE
+                confidence = aggression_pct
+            elif flag_focus_pct > 0.6:
+                strategy = OpponentStrategy.FLAG_FOCUSED
+                confidence = flag_focus_pct
+            elif defense_pct > 0.6:
+                strategy = OpponentStrategy.DEFENSIVE
+                confidence = defense_pct
+            elif max(aggression_pct, flag_focus_pct, defense_pct, coordination_pct) < 0.3:
+                strategy = OpponentStrategy.RANDOM
+                confidence = 0.5
                 
+            # Update strategy with confidence
+            self.identified_strategies[i] = strategy
+            self.strategy_confidence[i] = min(1.0, confidence)
+        
     def _identify_team_strategy(self, state: Dict[str, Any]):
         """
         Identify team-level strategy.
@@ -231,15 +237,15 @@ class OpponentModeler:
             state: Current game state
         """
         # Get strategies for all opponents on team 1
-        team_strategies = [strategy for agent_id, strategy in self.identified_strategies.items()
-                         if next((a for a in state['agents'] if a['id'] == agent_id), {'team': -1})['team'] == 1]
+        team_strategies = [strategy for i, strategy in enumerate(self.identified_strategies)
+                         if next((a for a in state['agents'] if a['id'] == i), {'team': -1})['team'] == 1]
         
         if not team_strategies:
             return
             
         # Check for coordinated strategy - all agents have same strategy
         if len(set(team_strategies)) == 1 and team_strategies[0] != OpponentStrategy.UNKNOWN:
-            self.team_strategy[1] = OpponentStrategy.COORDINATED
+            self.team_strategy[1] = team_strategies[0]
             return
             
         # Otherwise use most common strategy
@@ -251,171 +257,130 @@ class OpponentModeler:
             if strategy != OpponentStrategy.UNKNOWN:
                 self.team_strategy[1] = strategy
                 
-    def _is_in_territory(self, position: np.ndarray, team: int, state: Dict[str, Any]) -> bool:
-        """
-        Check if a position is in a team's territory.
+    def _update_danger_zones(self):
+        """Update danger zones based on opponent movement patterns"""
+        # Clear previous danger zones
+        self.danger_zones = []
         
-        Args:
-            position: Position to check
-            team: Team whose territory to check
-            state: Game state
-            
-        Returns:
-            True if in territory, False otherwise
-        """
-        territories = state['territories']
-        territory = territories[team]
-        
-        # Simple polygon check using ray casting algorithm
-        x, y = position
-        n = len(territory)
-        inside = False
-        
-        p1x, p1y = territory[0]
-        for i in range(1, n + 1):
-            p2x, p2y = territory[i % n]
-            if y > min(p1y, p2y):
-                if y <= max(p1y, p2y):
-                    if x <= max(p1x, p2x):
-                        if p1y != p2y:
-                            xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                        if p1x == p2x or x <= xinters:
-                            inside = not inside
-            p1x, p1y = p2x, p2y
-            
-        return inside
+        # Create heatmap from opponent positions
+        for i in range(len(self.position_history)):
+            if len(self.position_history[i]) < 3:
+                continue
                 
-    def get_counter_strategy(self, agent_id: int = None) -> str:
-        """
-        Get suggested counter-strategy for an opponent.
-        
-        Args:
-            agent_id: ID of the opponent (None for team strategy)
+            # Get recent positions with higher weight for more recent ones
+            positions = list(self.position_history[i])
+            weights = [0.5 + 0.5 * (idx / len(positions)) for idx in range(len(positions))]
             
-        Returns:
-            Suggested counter-strategy name
-        """
-        if agent_id is not None and agent_id in self.identified_strategies:
-            strategy = self.identified_strategies[agent_id]
-        else:
-            # Use team strategy if agent not specified or not identified
-            strategy = self.team_strategy[1]
+            # Add positions to danger zones with their weights and the opponent's strategy
+            for pos, weight in zip(positions, weights):
+                strategy = self.identified_strategies[i]
+                # Higher danger for aggressive opponents
+                danger_factor = 1.5 if strategy == OpponentStrategy.AGGRESSIVE else 1.0
+                self.danger_zones.append((pos, weight * danger_factor, strategy))
+    
+    def get_opponent_strategies(self) -> List[Tuple[OpponentStrategy, float]]:
+        """Return the identified strategies with confidence levels"""
+        return [(self.identified_strategies[i], self.strategy_confidence[i]) 
+                for i in range(len(self.position_history))]
+    
+    def suggest_counter_strategy(self) -> str:
+        """Suggest a counter strategy based on identified opponent strategies"""
+        # Count strategy occurrences
+        strategy_counts = defaultdict(int)
+        for strategy in self.identified_strategies:
+            strategy_counts[strategy] += 1
             
-        # Return counter-strategy suggestion
-        return self.counter_strategies.get(strategy, "balanced")
-        
-    def get_danger_score(self, position: np.ndarray, state: Dict[str, Any]) -> float:
-        """
-        Calculate danger score for a position based on opponent models.
-        
-        Args:
-            position: Position to evaluate
-            state: Current game state
+        # Determine dominant strategy
+        dominant_strategy = max(strategy_counts.items(), key=lambda x: x[1])[0] 
+        if dominant_strategy == OpponentStrategy.UNKNOWN:
+            # Find next most dominant
+            strategies = list(strategy_counts.items())
+            strategies.sort(key=lambda x: x[1], reverse=True)
+            if len(strategies) > 1:
+                dominant_strategy = strategies[1][0]
             
-        Returns:
-            Danger score (0.0-1.0, higher = more dangerous)
-        """
-        opponents = [agent for agent in state['agents'] if agent['team'] != 0]
-        if not opponents:
+        # Suggest counter strategy
+        return self.counter_strategies.get(dominant_strategy, "balanced")
+    
+    def calculate_danger_score(self, position) -> float:
+        """Calculate danger score for a given position"""
+        if not self.danger_zones:
             return 0.0
             
+        # Calculate danger based on proximity to danger zones
         danger_score = 0.0
+        position = np.array(position)
         
-        for opponent in opponents:
-            agent_id = opponent['id']
-            op_position = np.array(opponent['position'])
-            distance = np.linalg.norm(position - op_position)
-            
-            # Base danger from proximity
-            proximity_danger = max(0.0, 1.0 - distance / 50.0)
-            
-            # Adjust danger based on identified strategy
-            strategy_multiplier = 1.0
-            if agent_id in self.identified_strategies:
-                strategy = self.identified_strategies[agent_id]
-                if strategy == OpponentStrategy.AGGRESSIVE:
-                    strategy_multiplier = 1.5  # Aggressive opponents are more dangerous
-                elif strategy == OpponentStrategy.DEFENSIVE:
-                    strategy_multiplier = 0.7  # Defensive opponents less likely to chase
-                    
-            # Add to total danger score (weighted by proximity)
-            danger_score = max(danger_score, proximity_danger * strategy_multiplier)
-            
-        return min(1.0, danger_score)  # Cap at 1.0
-        
-    def suggest_path(self, start: np.ndarray, goal: np.ndarray, state: Dict[str, Any]) -> List[np.ndarray]:
-        """
-        Suggest a safe path from start to goal avoiding dangers.
-        
-        Args:
-            start: Starting position
-            goal: Goal position
-            state: Current game state
-            
-        Returns:
-            List of waypoints for a safer path
-        """
-        # Direct path
-        direct_vector = goal - start
-        distance = np.linalg.norm(direct_vector)
-        
-        if distance < 1e-6:
-            return [goal]  # Already at goal
-            
-        normalized_direct = direct_vector / distance
-        
-        # Check danger along direct path
-        path_danger = 0.0
-        num_samples = 5
-        for i in range(1, num_samples + 1):
-            sample_point = start + direct_vector * (i / (num_samples + 1))
-            path_danger = max(path_danger, self.get_danger_score(sample_point, state))
-            
-        # If path is safe enough, just return direct path
-        if path_danger < 0.3:
-            return [goal]
-            
-        # Calculate perpendicular vector for flanking
-        perp_vector = np.array([-direct_vector[1], direct_vector[0]])
-        perp_vector = perp_vector / np.linalg.norm(perp_vector)
-        
-        # Check danger along left and right flanking paths
-        left_flank = start + perp_vector * (distance * 0.3)  # 30% of distance perpendicular
-        right_flank = start - perp_vector * (distance * 0.3)
-        
-        left_danger = self.get_danger_score(left_flank, state)
-        right_danger = self.get_danger_score(right_flank, state)
-        
-        # Choose safer path
-        if left_danger < right_danger and left_danger < path_danger:
-            waypoint = left_flank
-        elif right_danger < left_danger and right_danger < path_danger:
-            waypoint = right_flank
-        else:
-            # If both flanks are dangerous, try farther flanks
-            far_left = start + perp_vector * (distance * 0.6)
-            far_right = start - perp_vector * (distance * 0.6)
-            
-            far_left_danger = self.get_danger_score(far_left, state)
-            far_right_danger = self.get_danger_score(far_right, state)
-            
-            if far_left_danger < far_right_danger:
-                waypoint = far_left
-            else:
-                waypoint = far_right
+        for zone_pos, weight, strategy in self.danger_zones:
+            dist = np.linalg.norm(position - np.array(zone_pos))
+            if dist < 15.0:  # Only consider nearby zones
+                # Danger decreases with distance
+                zone_danger = weight * (1.0 - min(1.0, dist / 15.0))
+                danger_score += zone_danger
                 
-        # Check if flanking point is safe, otherwise try center-point between start/goal
-        if self.get_danger_score(waypoint, state) > 0.5:
-            midpoint = (start + goal) / 2
-            waypoint = midpoint
-        
-        # Map boundaries
-        map_size = np.array(state.get('map_size', [100, 100]))
-        waypoint = np.clip(waypoint, [0, 0], map_size)
-        
-        # Return waypoint and goal
-        return [waypoint, goal]
+        # Normalize danger score
+        return min(1.0, danger_score / 3.0)
+    
+    def suggest_safe_path(self, start_pos, goal_pos, map_size, step_size=5.0, samples=10) -> List[Tuple[float, float]]:
+        """Suggest a safe path from start to goal avoiding danger zones"""
+        if not self.danger_zones:
+            # Direct path if no danger
+            return [start_pos, goal_pos]
             
+        start_pos = np.array(start_pos)
+        goal_pos = np.array(goal_pos)
+        direct_dist = np.linalg.norm(goal_pos - start_pos)
+        
+        # If very close to goal, go direct
+        if direct_dist < 10.0:
+            return [start_pos, goal_pos]
+        
+        # Try different paths and select safest
+        best_path = [start_pos, goal_pos]
+        best_safety = -1.0
+        
+        for _ in range(samples):
+            # Generate a random midpoint
+            angle = np.random.uniform(0, 2 * np.pi)
+            offset_dist = np.random.uniform(0.3, 0.7) * direct_dist
+            midpoint = start_pos + offset_dist * np.array([np.cos(angle), np.sin(angle)])
+            
+            # Ensure midpoint is within map bounds
+            midpoint[0] = np.clip(midpoint[0], 0, map_size[0])
+            midpoint[1] = np.clip(midpoint[1], 0, map_size[1])
+            
+            # Evaluate path safety
+            path = [start_pos, midpoint, goal_pos]
+            path_safety = self._evaluate_path_safety(path)
+            
+            if path_safety > best_safety:
+                best_path = path
+                best_safety = path_safety
+                
+        return best_path
+    
+    def _evaluate_path_safety(self, path) -> float:
+        """Evaluate the safety of a path based on danger zones"""
+        total_safety = 0.0
+        
+        # Check safety at multiple points along the path
+        for i in range(len(path) - 1):
+            start = np.array(path[i])
+            end = np.array(path[i+1])
+            dist = np.linalg.norm(end - start)
+            
+            # Sample points along this segment
+            num_samples = max(2, int(dist / 5.0))
+            for j in range(num_samples):
+                t = j / (num_samples - 1)
+                point = start + t * (end - start)
+                danger = self.calculate_danger_score(point)
+                segment_safety = 1.0 - danger
+                total_safety += segment_safety
+                
+        # Average safety score
+        return total_safety / (len(path) - 1)
+        
     def _print_strategy_debug(self):
         """Print debug information about identified strategies."""
         if self.debug_level < 2:
@@ -426,15 +391,14 @@ class OpponentModeler:
         
         # Individual agent strategies
         print("Individual Agents:")
-        for agent_id, strategy in self.identified_strategies.items():
-            stats = self.agent_stats[agent_id]
-            print(f"  Agent {agent_id}: {strategy.name}")
-            print(f"    Scores: AGG={stats['aggressive_score']:.1f}, DEF={stats['defensive_score']:.1f}, "
-                 f"RUSH={stats['rushing_score']:.1f}, FLANK={stats['flanking_score']:.1f}, "
-                 f"COORD={stats['coordinated_score']:.1f}")
+        for i, strategy in enumerate(self.identified_strategies):
+            stats = self.agent_stats.get(i, {})
+            print(f"  Agent {i}: {strategy.name}")
+            print(f"    Scores: AGG={stats.get('aggressive_score', 0):.1f}, DEF={stats.get('defensive_score', 0):.1f}, "
+                 f"FLAG_FOCUSED={stats.get('flag_focused_score', 0):.1f}, COORD={stats.get('coordinated_score', 0):.1f}")
                  
         # Team strategy
         print("\nTeam Strategy:")
         print(f"  Team 1: {self.team_strategy[1].name}")
-        print(f"  Recommended Counter: {self.get_counter_strategy()}")
+        print(f"  Recommended Counter: {self.suggest_counter_strategy()}")
         print("-" * 40) 

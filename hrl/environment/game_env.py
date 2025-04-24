@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.animation import FuncAnimation
 import torch
+from collections import deque
 
 class GameState(Enum):
     """Possible game states."""
@@ -14,6 +15,7 @@ class GameState(Enum):
     WON = 1
     LOST = 2
     DRAW = 3
+    IN_PROGRESS = 4
 
 @dataclass
 class Agent:
@@ -27,6 +29,20 @@ class Agent:
     health: float = 100.0
     last_action: np.ndarray = None
     tag_timer: int = 0
+    tag_cooldown: int = 0
+    tagged_by: int = None
+    had_flag: bool = False
+    prev_positions: deque = deque(maxlen=20)
+    
+    def __eq__(self, other):
+        """Compare agents based on their ID."""
+        if not isinstance(other, Agent):
+            return False
+        return self.id == other.id
+        
+    def __hash__(self):
+        """Hash based on ID for use in sets/dicts."""
+        return hash(self.id)
 
 @dataclass
 class Flag:
@@ -35,6 +51,7 @@ class Flag:
     is_captured: bool
     team: int
     carrier_id: int = None
+    carrier: Agent = None
 
 class GameEnvironment:
     """Environment for the capture-the-flag game."""
@@ -55,6 +72,7 @@ class GameEnvironment:
                 - max_velocity: Maximum agent velocity (default: 5.0)
                 - win_score: Score needed to win (default: 3)
                 - debug_level: Level of debug output (0=none, 1=minimal, 2=verbose)
+                - position_history_length: Length of position history (default: 20)
         """
         self.config = config
         self.map_size = np.array(config.get('map_size', [100, 100]))
@@ -66,9 +84,11 @@ class GameEnvironment:
         self.difficulty = config.get('difficulty', 0.5)
         self.max_velocity = config.get('max_velocity', 5.0)
         self.tag_duration = config.get('tag_duration', 20)
+        self.tag_cooldown = config.get('tag_cooldown', 10)
         self.team_scores = [0, 0]  # Team 0 and Team 1
         self.win_score = config.get('win_score', 3)
         self.debug_level = config.get('debug_level', 1)  # Default to minimal debugging
+        self.history_length = config.get('position_history_length', 20)  # For tracking previous positions
         
         # Initialize game state
         self.agents: List[Agent] = []
@@ -130,8 +150,14 @@ class GameEnvironment:
                     has_flag=False,
                     is_tagged=False,
                     team=team,
-                    id=agent_id
+                    id=agent_id,
+                    tag_timer=0,
+                    tag_cooldown=0,
+                    tagged_by=None,
+                    had_flag=False,
+                    prev_positions=deque(maxlen=self.history_length)
                 ))
+                self.agents[-1].prev_positions.append(pos.copy())  # Initialize with starting position
                 agent_id += 1
                 
         # Define territories
@@ -342,39 +368,49 @@ class GameEnvironment:
     
     def _handle_agent_tagging(self, agent):
         """
-        Handle agent tagging mechanics
+        Handle tagging mechanics between agents.
         
         Args:
-            agent: The agent to check for tagging interactions
+            agent: Agent to check for tagging others
         """
-        # Skip if agent is tagged or has tag immunity
-        if agent.is_tagged or agent.tag_timer < 0:
+        # Skip if agent is tagged or on cooldown
+        if agent.is_tagged or agent.tag_cooldown > 0:
             return
-            
-        # Check for tagging opponents
-        for other_agent in self.agents:
-            # Skip self, tagged agents, and teammates
-            if other_agent.id == agent.id or other_agent.is_tagged or other_agent.team == agent.team:
-                continue
-                
-            # Calculate distance between agents
-            distance = np.linalg.norm(agent.position - other_agent.position)
-            
-            # Check if within tagging range
+        
+        # Get potential targets (opponents not on cooldown)
+        opponents = [other for other in self.agents 
+                    if other.team != agent.team and not other.is_tagged]
+                    
+        # Check for tag
+        for opponent in opponents:
+            distance = np.linalg.norm(agent.position - opponent.position)
             if distance < self.tag_radius:
-                # Tag the other agent
-                other_agent.is_tagged = True
-                other_agent.tag_timer = self.tag_duration
+                # Set the opponent as tagged
+                opponent.is_tagged = True
+                opponent.tag_timer = self.tag_duration
                 
-                # If tagged agent had flag, drop it
-                if other_agent.has_flag:
-                    other_agent.has_flag = False
-                    for flag in self.flags:
-                        if flag.team != other_agent.team and flag.carrier_id == other_agent.id:
-                            flag.is_captured = False
-                            flag.carrier_id = None
-                            flag.position = other_agent.position.copy()
-                            
+                # Record which agent did the tagging
+                opponent.tagged_by = agent.id
+                
+                # Record if the opponent had a flag when tagged
+                opponent.had_flag = opponent.has_flag
+                
+                # If the opponent had a flag, handle flag drop
+                if opponent.has_flag:
+                    # Find the flag being carried
+                    flag = next((f for f in self.flags if f.is_captured and f.carrier == opponent.id), None)
+                    if flag:
+                        # Drop the flag
+                        flag.is_captured = False
+                        flag.carrier = None
+                        opponent.has_flag = False
+                        
+                        # Flag stays where it was dropped
+                        # (position is already updated to match carrier)
+                
+                # Agent that did the tagging gets cooldown
+                agent.tag_cooldown = self.tag_cooldown
+                
                 # Update metrics
                 if agent.team == 0:
                     # Increment tagging metric for player team
@@ -383,7 +419,7 @@ class GameEnvironment:
                             self.metrics['tags_by_team_0'] += 1
                 
                 if self.debug_level >= 2:
-                    print(f"Agent {other_agent.id} (team {other_agent.team}) tagged by agent {agent.id}!")
+                    print(f"Agent {opponent.id} (team {opponent.team}) tagged by agent {agent.id}!")
                     
     def _check_scoring(self):
         """Check if agents with flags have reached their base to score."""
@@ -412,50 +448,170 @@ class GameEnvironment:
                     print(f"Team {agent.team} scored! New score: {self.team_scores}")
         
     def _calculate_reward(self, agent) -> float:
-        """Calculate rewards for the current state."""
+        """
+        Calculate rewards for the current state.
+        
+        Reward structure focuses on:
+        1. Team-oriented behaviors
+        2. Defensive actions
+        3. Cooperation incentives 
+        4. Effective actions over ineffective ones
+        """
         reward = 0.0
+        agent_team = agent.team
         
         # Base reward for winning/losing
         if self.game_state == GameState.WON:
-            reward += 10.0
+            reward += 15.0  # Increased to emphasize team victory
         elif self.game_state == GameState.LOST:
-            reward -= 10.0
-            
-        # Reward for scoring
-        reward += self.team_scores[agent.team] * 5.0
+            reward -= 15.0  # Increased penalty to emphasize avoiding defeat
         
-        # Reward for capturing flag
+        # ---- TEAM SUCCESS REWARDS ----
+        # Team scoring reward (all team members benefit)
+        team_score_reward = self.team_scores[agent_team] * 4.0
+        reward += team_score_reward
+        
+        # Relative team performance bonus (encourages gaining advantage)
+        score_difference = self.team_scores[agent_team] - self.team_scores[1 - agent_team]
+        if score_difference > 0:
+            reward += score_difference * 2.0  # Reward for maintaining lead
+        
+        # ---- INDIVIDUAL CONTRIBUTION REWARDS ----
+        # Flag carrying reward (direct contribution)
         if agent.has_flag:
-            reward += 3.0
+            # Scaled reward that increases as agent gets closer to base
+            base_pos = self.team_bases[agent_team]
+            dist_to_base = np.linalg.norm(agent.position - base_pos)
+            map_diagonal = np.linalg.norm(self.map_size)
+            capture_progress = max(0, 1.0 - dist_to_base / map_diagonal)
+            reward += 2.0 + (capture_progress * 3.0)  # Progressive reward based on progress
+        
+        # ---- DEFENSIVE ACTIONS REWARDS ----
+        # Reward for guarding own flag
+        own_flag = next((flag for flag in self.flags if flag.team == agent_team and not flag.is_captured), None)
+        if own_flag:
+            dist_to_own_flag = np.linalg.norm(agent.position - own_flag.position)
+            map_diagonal = np.linalg.norm(self.map_size)
             
-        # Reward for tagging opponents
-        reward += sum(1.0 for other in self.agents if other.team != agent.team and other.is_tagged)
+            # Defensive positioning reward - being close to flag but not on top of it
+            optimal_defense_distance = 10.0  # Not too close, not too far
+            defense_effectiveness = max(0, 1.0 - abs(dist_to_own_flag - optimal_defense_distance) / optimal_defense_distance)
+            
+            # Only reward defensive positioning if there are enemies nearby
+            enemy_near_flag = False
+            for other in self.agents:
+                if other.team != agent_team:
+                    enemy_dist_to_flag = np.linalg.norm(other.position - own_flag.position)
+                    if enemy_dist_to_flag < map_diagonal * 0.3:  # Enemy within 30% of map diagonal
+                        enemy_near_flag = True
+                        break
+            
+            if enemy_near_flag:
+                reward += defense_effectiveness * 2.0  # Meaningful defense reward
         
-        # Penalty for being tagged
+        # Reward for tagging opponents (more if they have the flag)
+        tag_reward = 0
+        for other in self.agents:
+            if other.team != agent_team and other.is_tagged:
+                # Check if this agent was responsible for the tag
+                if hasattr(other, 'tagged_by') and other.tagged_by == agent.id:
+                    base_tag_reward = 1.5  # Base reward for tagging
+                    if hasattr(other, 'had_flag') and other.had_flag:
+                        # Extra reward for stopping a flag carrier
+                        base_tag_reward += 2.5
+                    tag_reward += base_tag_reward
+        
+        reward += tag_reward
+        
+        # Penalty for being tagged (more severe if carrying flag)
         if agent.is_tagged:
-            reward -= 2.0
+            tag_penalty = 2.0
+            if hasattr(agent, 'had_flag') and agent.had_flag:
+                tag_penalty += 3.0  # Extra penalty for losing flag
+            reward -= tag_penalty
         
-        # Reward for approaching flag/base
-        if not agent.has_flag:
+        # ---- OBJECTIVE-ORIENTED REWARDS ----
+        # Reward for approaching enemy flag when it makes strategic sense
+        if not agent.has_flag and not agent.is_tagged:
+            # Only reward approaching flag if no other teammate is closer or carrying flag
+            
+            # Check if any teammate is carrying the flag
+            teammate_has_flag = any(a.has_flag and a.team == agent_team for a in self.agents)
+            
             # Find closest enemy flag
-            enemy_flags = [flag for flag in self.flags if flag.team != agent.team and not flag.is_captured]
-            if enemy_flags:
+            enemy_flags = [flag for flag in self.flags if flag.team != agent_team and not flag.is_captured]
+            
+            if enemy_flags and not teammate_has_flag:
                 closest_flag = min(enemy_flags, key=lambda f: np.linalg.norm(agent.position - f.position))
                 dist_to_flag = np.linalg.norm(agent.position - closest_flag.position)
+                
+                # Check if this agent is the closest teammate to the flag
+                is_closest_teammate = True
+                for other in self.agents:
+                    if other != agent and other.team == agent_team and not other.is_tagged:
+                        other_dist = np.linalg.norm(other.position - closest_flag.position)
+                        if other_dist < dist_to_flag:
+                            is_closest_teammate = False
+                            break
+                
                 # Use map diagonal as normalization factor
                 map_diagonal = np.linalg.norm(self.map_size)
-                reward += max(0, 1.0 - dist_to_flag / map_diagonal) * 0.5
+                
+                # Scale reward based on role effectiveness
+                approach_reward = max(0, 1.0 - dist_to_flag / map_diagonal)
+                if is_closest_teammate:
+                    approach_reward *= 1.0  # Full reward if closest teammate
+                else:
+                    approach_reward *= 0.2  # Reduced reward if redundant
+                
+                reward += approach_reward
         else:
-            # Reward for approaching own base with flag
-            base_pos = self.team_bases[agent.team]
-            dist_to_base = np.linalg.norm(agent.position - base_pos)
-            # Use map diagonal as normalization factor
-            map_diagonal = np.linalg.norm(self.map_size)
-            reward += max(0, 1.0 - dist_to_base / map_diagonal) * 1.0
+            # Reward for approaching own base with flag - already handled above
+            pass
         
-        # Small reward for being in opponent territory
-        if self._is_in_territory(agent.position, 1 - agent.team):
-            reward += 0.2
+        # ---- TERRITORIAL REWARDS ----
+        # Reward for controlling key territory
+        if self._is_in_territory(agent.position, 1 - agent_team):
+            # Being in enemy territory is only valuable in certain circumstances
+            if agent.has_flag:
+                # If carrying flag, being in enemy territory is risky, small reward
+                reward += 0.1
+            elif any(a.has_flag and a.team == agent_team for a in self.agents):
+                # If teammate has flag, being in enemy territory can provide support
+                reward += 0.3
+            else:
+                # Otherwise, in enemy territory proactively 
+                reward += 0.2
+        
+        # ---- ANTI-CAMPING PENALTIES ----
+        # Discourage ineffective camping by checking if the agent has been stationary for too long
+        if hasattr(agent, 'prev_positions'):
+            if len(agent.prev_positions) >= 10:  # Check last 10 positions
+                total_movement = 0
+                for i in range(1, len(agent.prev_positions)):
+                    total_movement += np.linalg.norm(agent.prev_positions[i] - agent.prev_positions[i-1])
+                
+                # If almost no movement and not in a defensive position
+                if total_movement < 5.0 and not (own_flag and dist_to_own_flag < 20.0):
+                    reward -= 0.5  # Penalty for camping/inactivity
+        
+        # ---- TEAM COORDINATION REWARDS ----
+        # Reward for maintaining good team formation (not all clustered, not all spread out)
+        teammates = [a for a in self.agents if a.team == agent_team]
+        if len(teammates) > 1:
+            positions = np.array([a.position for a in teammates])
+            
+            # Calculate centroid and average distance to centroid
+            centroid = positions.mean(axis=0)
+            distances = [np.linalg.norm(a.position - centroid) for a in teammates]
+            avg_distance = sum(distances) / len(distances)
+            
+            # Calculate ideal spread based on map size
+            ideal_spread = np.linalg.norm(self.map_size) * 0.2  # 20% of map diagonal
+            formation_quality = max(0, 1.0 - abs(avg_distance - ideal_spread) / ideal_spread)
+            
+            # Reward good formation
+            reward += formation_quality * 0.2
             
         return reward
         
@@ -600,53 +756,150 @@ class GameEnvironment:
         # Base reward for winning/losing
         win_reward = 0
         if self.game_state == GameState.WON:
-            win_reward = 10.0
-            print(f"  Win reward: +10.0")
+            win_reward = 15.0
+            print(f"  Win reward: +15.0")
         elif self.game_state == GameState.LOST:
-            win_reward = -10.0
-            print(f"  Loss penalty: -10.0")
+            win_reward = -15.0
+            print(f"  Loss penalty: -15.0")
             
-        # Reward for scoring
-        score_reward = self.team_scores[0] * 5.0
-        print(f"  Scoring reward: +{score_reward:.1f} ({self.team_scores[0]} points x 5.0)")
+        # Team scoring reward
+        team_score_reward = self.team_scores[agent.team] * 4.0
+        print(f"  Team scoring reward: +{team_score_reward:.1f} ({self.team_scores[agent.team]} points x 4.0)")
         
-        # Reward for capturing flag
+        # Relative team performance bonus
+        score_difference = self.team_scores[agent.team] - self.team_scores[1 - agent.team]
+        score_difference_reward = 0
+        if score_difference > 0:
+            score_difference_reward = score_difference * 2.0
+            print(f"  Relative team performance bonus: +{score_difference_reward:.1f} ({score_difference} points x 2.0)")
+        
+        # Flag carrying reward
         flag_reward = 0
         if agent.has_flag:
-            flag_reward = 3.0
-            print(f"  Flag capture reward: +3.0")
-            
-        # Reward for tagging opponents
-        tag_reward = sum(1.0 for other in self.agents if other.team != agent.team and other.is_tagged)
-        print(f"  Tagging reward: +{tag_reward:.1f} ({sum(1 for other in self.agents if other.team != agent.team and other.is_tagged)} tags)")
-        
-        # Penalty for being tagged
-        tag_penalty = -2.0 if agent.is_tagged else 0
-        print(f"  Tag penalty: {tag_penalty:.1f}")
-        
-        # Use map diagonal as normalization factor
-        map_diagonal = np.linalg.norm(self.map_size)
-        
-        # Reward for approaching flag/base
-        approach_reward = 0
-        if not agent.has_flag:
-            # Find closest enemy flag
-            enemy_flags = [flag for flag in self.flags if flag.team != agent.team and not flag.is_captured]
-            if enemy_flags:
-                closest_flag = min(enemy_flags, key=lambda f: np.linalg.norm(agent.position - f.position))
-                dist_to_flag = np.linalg.norm(agent.position - closest_flag.position)
-                # Use map diagonal as normalization factor
-                approach_reward += max(0, 1.0 - dist_to_flag / map_diagonal) * 0.5
-                print(f"  Approaching flag reward: +{max(0, 1.0 - dist_to_flag / map_diagonal) * 0.5:.2f} (distance: {dist_to_flag:.1f})")
-        else:
-            # Reward for approaching own base with flag
             base_pos = self.team_bases[agent.team]
             dist_to_base = np.linalg.norm(agent.position - base_pos)
-            approach_reward += max(0, 1.0 - dist_to_base / map_diagonal) * 1.0
-            print(f"  Approaching base with flag reward: +{max(0, 1.0 - dist_to_base / map_diagonal) * 1.0:.2f} (distance: {dist_to_base:.1f})")
+            map_diagonal = np.linalg.norm(self.map_size)
+            capture_progress = max(0, 1.0 - dist_to_base / map_diagonal)
+            flag_reward = 2.0 + (capture_progress * 3.0)
+            print(f"  Flag carrying reward: +{flag_reward:.1f} (capture progress: {capture_progress:.2f})")
+        
+        # Defensive actions reward
+        defense_reward = 0
+        own_flag = next((flag for flag in self.flags if flag.team == agent.team and not flag.is_captured), None)
+        if own_flag:
+            dist_to_own_flag = np.linalg.norm(agent.position - own_flag.position)
+            map_diagonal = np.linalg.norm(self.map_size)
             
+            optimal_defense_distance = 10.0
+            defense_effectiveness = max(0, 1.0 - abs(dist_to_own_flag - optimal_defense_distance) / optimal_defense_distance)
+            
+            enemy_near_flag = False
+            for other in self.agents:
+                if other.team != agent.team:
+                    enemy_dist_to_flag = np.linalg.norm(other.position - own_flag.position)
+                    if enemy_dist_to_flag < map_diagonal * 0.3:
+                        enemy_near_flag = True
+                        break
+            
+            if enemy_near_flag:
+                defense_reward = defense_effectiveness * 2.0
+                print(f"  Defensive actions reward: +{defense_reward:.1f} (defense effectiveness: {defense_effectiveness:.2f})")
+        
+        # Tagging reward
+        tag_reward = 0
+        for other in self.agents:
+            if other.team != agent.team and other.is_tagged:
+                if hasattr(other, 'tagged_by') and other.tagged_by == agent.id:
+                    base_tag_reward = 1.5
+                    if hasattr(other, 'had_flag') and other.had_flag:
+                        base_tag_reward += 2.5
+                    tag_reward += base_tag_reward
+        
+        if tag_reward > 0:
+            print(f"  Tagging reward: +{tag_reward:.1f}")
+        
+        # Penalty for being tagged
+        tag_penalty = 0
+        if agent.is_tagged:
+            tag_penalty = 2.0
+            if hasattr(agent, 'had_flag') and agent.had_flag:
+                tag_penalty += 3.0
+            print(f"  Tag penalty: -{tag_penalty:.1f}")
+        
+        # Objective-oriented reward
+        objective_reward = 0
+        if not agent.has_flag and not agent.is_tagged:
+            teammate_has_flag = any(a.has_flag and a.team == agent.team for a in self.agents)
+            enemy_flags = [flag for flag in self.flags if flag.team != agent.team and not flag.is_captured]
+            
+            if enemy_flags and not teammate_has_flag:
+                closest_flag = min(enemy_flags, key=lambda f: np.linalg.norm(agent.position - f.position))
+                dist_to_flag = np.linalg.norm(agent.position - closest_flag.position)
+                
+                is_closest_teammate = True
+                for other in self.agents:
+                    if other != agent and other.team == agent.team and not other.is_tagged:
+                        other_dist = np.linalg.norm(other.position - closest_flag.position)
+                        if other_dist < dist_to_flag:
+                            is_closest_teammate = False
+                            break
+                
+                map_diagonal = np.linalg.norm(self.map_size)
+                approach_reward = max(0, 1.0 - dist_to_flag / map_diagonal)
+                if is_closest_teammate:
+                    approach_reward *= 1.0
+                    print(f"  Objective reward: +{approach_reward:.2f} (closest to flag, distance: {dist_to_flag:.1f})")
+                else:
+                    approach_reward *= 0.2
+                    print(f"  Objective reward: +{approach_reward:.2f} (not closest to flag, distance: {dist_to_flag:.1f})")
+                
+                objective_reward = approach_reward
+        
+        # Territorial reward
+        territorial_reward = 0
+        if self._is_in_territory(agent.position, 1 - agent.team):
+            if agent.has_flag:
+                territorial_reward = 0.1
+                print(f"  Territorial reward: +0.1 (carrying flag in enemy territory)")
+            elif any(a.has_flag and a.team == agent.team for a in self.agents):
+                territorial_reward = 0.3
+                print(f"  Territorial reward: +0.3 (supporting teammate with flag)")
+            else:
+                territorial_reward = 0.2
+                print(f"  Territorial reward: +0.2 (proactive invasion)")
+        
+        # Anti-camping penalty
+        camping_penalty = 0
+        if hasattr(agent, 'prev_positions') and len(agent.prev_positions) >= 10:
+            total_movement = 0
+            for i in range(1, len(agent.prev_positions)):
+                total_movement += np.linalg.norm(np.array(agent.prev_positions[i]) - np.array(agent.prev_positions[i-1]))
+            
+            if total_movement < 5.0 and not (own_flag and dist_to_own_flag < 20.0):
+                camping_penalty = 0.5
+                print(f"  Anti-camping penalty: -0.5 (movement: {total_movement:.1f})")
+        
+        # Team coordination reward
+        team_coordination_reward = 0
+        teammates = [a for a in self.agents if a.team == agent.team]
+        if len(teammates) > 1:
+            positions = np.array([a.position for a in teammates])
+            
+            centroid = positions.mean(axis=0)
+            distances = [np.linalg.norm(a.position - centroid) for a in teammates]
+            avg_distance = sum(distances) / len(distances)
+            
+            ideal_spread = np.linalg.norm(self.map_size) * 0.2
+            formation_quality = max(0, 1.0 - abs(avg_distance - ideal_spread) / ideal_spread)
+            
+            team_coordination_reward = formation_quality * 0.2
+            print(f"  Team coordination reward: +{team_coordination_reward:.2f} (formation quality: {formation_quality:.2f})")
+        
         # Sum of rewards
-        calculated_reward = win_reward + score_reward + flag_reward + tag_reward + approach_reward + tag_penalty
+        calculated_reward = (win_reward + team_score_reward + score_difference_reward + 
+                            flag_reward + defense_reward + tag_reward - tag_penalty + 
+                            objective_reward + territorial_reward - camping_penalty + 
+                            team_coordination_reward)
         print(f"  Calculated reward: {calculated_reward:.2f}")
         print(f"  Actual reward returned: {total_reward:.2f}")
 

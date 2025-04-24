@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import numpy as np
 from dataclasses import dataclass
 from hrl.utils.team_coordinator import TeamCoordinator, AgentRole
@@ -17,38 +17,39 @@ class AgentState:
 
 @dataclass
 class ProcessedState:
-    """Processed state information."""
-    agent_positions: np.ndarray  # Shape: (num_agents, 2)
-    agent_velocities: np.ndarray  # Shape: (num_agents, 2)
-    agent_flags: np.ndarray  # Shape: (num_agents,)
-    agent_tags: np.ndarray  # Shape: (num_agents,)
-    agent_health: np.ndarray  # Shape: (num_agents,)
-    agent_teams: np.ndarray  # Shape: (num_agents,)
-    agent_territory: np.ndarray  # Shape: (num_agents,)
-    flag_positions: np.ndarray  # Shape: (num_flags, 2)
-    flag_captured: np.ndarray  # Shape: (num_flags,)
-    flag_teams: np.ndarray  # Shape: (num_flags,)
-    base_positions: np.ndarray  # Shape: (num_teams, 2)
-    step_count: int
-    game_state: int
-    # Team coordination features
-    agent_roles: np.ndarray  # Shape: (num_agents,)
-    recommended_target: np.ndarray  # Shape: (2,)
-    our_flag_threat: float
-    enemy_flag_captured: bool
-    our_flag_captured: bool
+    """Processed state with normalized features."""
+    agent_positions: np.ndarray  # Position of each agent [x, y]
+    agent_velocities: np.ndarray  # Velocity of each agent [vx, vy]
+    agent_flags: np.ndarray  # Whether each agent has the flag (1) or not (0)
+    agent_tags: np.ndarray  # Whether each agent is tagged (1) or not (0)
+    agent_health: np.ndarray  # Health/energy of each agent [0-1]
+    agent_teams: np.ndarray  # Team of each agent (0 or 1)
+    agent_ids: np.ndarray  # ID of each agent
+    agent_roles: np.ndarray  # Optional role assignment for agents (0=attacker, 1=defender, 2=interceptor)
+    flag_positions: np.ndarray  # Position of each flag [x, y]
+    flag_captures: np.ndarray  # Whether each flag is captured (1) or not (0)
+    team_scores: np.ndarray  # Scores of each team
+    step: int  # Current step count
+    map_size: np.ndarray  # Map size [width, height]
+    normalized: bool = True  # Whether features are normalized
 
 class StateProcessor:
-    """Processes raw environment states into a format suitable for the policy."""
+    """Process raw environment states into a format suitable for learning."""
     
     def __init__(self, config: Dict[str, Any]):
-        """Initialize the state processor."""
+        """
+        Initialize the state processor.
+        
+        Args:
+            config: Configuration dictionary.
+        """
         self.config = config
         self.max_agents = config.get('max_agents', 6)
         self.num_flags = config.get('num_flags', 2)
         self.num_teams = config.get('num_teams', 2)
-        self.normalize = config.get('normalize', True)
+        self.normalize = config.get('normalize_state', True)
         self.norm_range = config.get('norm_range', [-1, 1])
+        self.debug_level = config.get('debug_level', 1)
         
         # Initialize team coordinator for team-based decision making
         self.team_coordinator = TeamCoordinator({
@@ -62,94 +63,115 @@ class StateProcessor:
         self.team_coordinator.reset()
         
     def process_state(self, state: Dict[str, Any]) -> ProcessedState:
-        """Process raw state into structured format with team coordination."""
+        """
+        Process raw state into a normalized, feature-rich representation.
+        
+        Args:
+            state: Raw state from environment
+            
+        Returns:
+            processed_state: Processed state with normalized features
+        """
         # Update team coordinator with the current state
         self.team_coordinator.update_roles(state)
         
-        # Extract agent information
-        num_agents = len(state['agents'])
-        agent_positions = np.zeros((self.max_agents, 2))
-        agent_velocities = np.zeros((self.max_agents, 2))
-        agent_flags = np.zeros(self.max_agents)
-        agent_tags = np.zeros(self.max_agents)
-        agent_teams = np.zeros(self.max_agents)
-        agent_health = np.zeros(self.max_agents)
-        agent_roles = np.zeros(self.max_agents)
+        # Extract basic features from raw state
+        map_size = np.array(state.get('map_size', [100, 100]))
+        team_scores = np.array(state.get('team_scores', [0, 0]))
+        step = state.get('step', 0)
         
-        # Process agent information with coordination data
-        for i, agent in enumerate(state['agents'][:self.max_agents]):
-            agent_id = agent.get('id', i)
+        # Process agent information
+        agents = state.get('agents', [])
+        num_agents = len(agents)
+        
+        # Initialize arrays for agent features
+        agent_positions = np.zeros((num_agents, 2))
+        agent_velocities = np.zeros((num_agents, 2))
+        agent_flags = np.zeros(num_agents)
+        agent_tags = np.zeros(num_agents)
+        agent_health = np.ones(num_agents)
+        agent_teams = np.zeros(num_agents)
+        agent_ids = np.zeros(num_agents)
+        agent_roles = np.zeros(num_agents)  # Default roles
+        
+        # Populate agent features
+        for i, agent in enumerate(agents):
             agent_positions[i] = self._normalize_position(agent['position'])
             agent_velocities[i] = self._normalize_velocity(agent['velocity'])
             agent_flags[i] = float(agent['has_flag'])
             agent_tags[i] = float(agent['is_tagged'])
-            agent_teams[i] = agent['team']
             agent_health[i] = agent['health'] / 100.0
-            
-            # Add role information for team members
-            if agent['team'] == 0:  # Our team
-                role = self.team_coordinator.get_agent_role(agent_id)
-                agent_roles[i] = role.value  # Store the role enum value
-            else:
-                agent_roles[i] = -1  # Default for enemy agents
-            
-        # Extract flag information
-        flag_positions = np.zeros((self.num_flags, 2))
-        flag_captured = np.zeros(self.num_flags)
-        flag_teams = np.zeros(self.num_flags)
+            agent_teams[i] = agent['team']
+            agent_ids[i] = agent['id'] if 'id' in agent else i
         
-        for i, flag in enumerate(state['flags']):
+        # Process flag information
+        flags = state.get('flags', [])
+        num_flags = len(flags)
+        
+        # Initialize arrays for flag features
+        flag_positions = np.zeros((num_flags, 2))
+        flag_captures = np.zeros(num_flags)
+        
+        # Populate flag features
+        for i, flag in enumerate(flags):
             flag_positions[i] = self._normalize_position(flag['position'])
-            flag_captured[i] = float(flag['is_captured'])
-            flag_teams[i] = flag['team']
-            
-        # Extract base positions
-        base_positions = np.zeros((self.num_teams, 2))
-        for team, pos in state['team_bases'].items():
-            base_positions[team] = self._normalize_position(pos)
-            
-        # Get coordination data for the primary agent (agent 0)
-        primary_agent_id = state['agents'][0].get('id', 0) if state['agents'] else 0
-        coordination_data = self.team_coordinator.get_coordination_data(primary_agent_id, state)
+            flag_captures[i] = float(flag['is_captured'])
         
-        # Get recommended target position based on role
-        recommended_target = self._normalize_position(coordination_data['recommended_target'])
+        # Normalize features if required
+        if self.normalize:
+            # Normalize positions and velocities
+            agent_positions = agent_positions / map_size
+            flag_positions = flag_positions / map_size
+            agent_velocities = agent_velocities / 5.0  # Assuming max velocity is 5
         
-        # Extract threat levels and flag status
-        our_flag_threat = coordination_data['own_flag_threat']
-        our_flag_captured = coordination_data['our_flag_captured']
-        enemy_flag_captured = coordination_data['enemy_flag_captured']
+        # Assign strategic roles for team 0 agents (our agents)
+        team_0_agents = [i for i, team in enumerate(agent_teams) if team == 0]
+        
+        if team_0_agents:
+            # For simplicity, assign fixed roles by position
+            # 0: Attacker - goes for flag
+            # 1: Defender - stays near home flag
+            # 2: Interceptor - tries to tag enemies with flags
             
-        return ProcessedState(
+            # Find our flag position (team 0)
+            our_flag_pos = flag_positions[0] if num_flags > 0 else np.array([0.1, 0.5])
+            
+            # Assign each agent a role based on their index
+            for i, agent_idx in enumerate(team_0_agents):
+                if i % 3 == 0:
+                    agent_roles[agent_idx] = 0  # Attacker
+                elif i % 3 == 1:
+                    agent_roles[agent_idx] = 1  # Defender
+                else:
+                    agent_roles[agent_idx] = 2  # Interceptor
+        
+        # Create processed state
+        processed_state = ProcessedState(
             agent_positions=agent_positions,
             agent_velocities=agent_velocities,
             agent_flags=agent_flags,
             agent_tags=agent_tags,
             agent_health=agent_health,
             agent_teams=agent_teams,
-            agent_territory=np.zeros(self.max_agents),
-            flag_positions=flag_positions,
-            flag_captured=flag_captured,
-            flag_teams=flag_teams,
-            base_positions=base_positions,
-            step_count=state['step_count'],
-            game_state=state['game_state'].value,
-            # Team coordination features
+            agent_ids=agent_ids,
             agent_roles=agent_roles,
-            recommended_target=recommended_target,
-            our_flag_threat=our_flag_threat,
-            enemy_flag_captured=enemy_flag_captured,
-            our_flag_captured=our_flag_captured
+            flag_positions=flag_positions,
+            flag_captures=flag_captures,
+            team_scores=team_scores,
+            step=step,
+            map_size=map_size,
+            normalized=self.normalize
         )
+        
+        return processed_state
         
     def _normalize_position(self, position: np.ndarray) -> np.ndarray:
         """Normalize position coordinates."""
         if not self.normalize:
             return position
             
-        map_size = self.config.get('map_size', [100, 100])
         position = np.array(position, dtype=np.float32)
-        position = position / np.array(map_size)
+        position = position / np.array(self.config.get('map_size', [100, 100]))
         if self.norm_range != [0, 1]:
             position = (position * (self.norm_range[1] - self.norm_range[0]) + 
                        self.norm_range[0])

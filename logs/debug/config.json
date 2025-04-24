@@ -1,0 +1,101 @@
+{
+  "env_config": {
+    "map_size": [
+      100,
+      100
+    ],
+    "num_agents": 3,
+    "max_steps": 500,
+    "tag_radius": 5,
+    "capture_radius": 10,
+    "difficulty": 0.2,
+    "debug_level": 2,
+    "win_score": 3
+  },
+  "policy_config": {
+    "action_size": 2,
+    "num_options": 5,
+    "hidden_size": 128,
+    "learning_rate": 0.001,
+    "gamma": 0.99,
+    "lambda_": 0.95,
+    "entropy_coef": 0.01,
+    "value_coef": 0.5,
+    "max_grad_norm": 0.5,
+    "use_gae": true,
+    "normalize_advantages": true,
+    "advantage_epsilon": 1e-08,
+    "options": [
+      "attack_flag",
+      "capture_flag",
+      "guard_flag",
+      "evade",
+      "retreat"
+    ]
+  },
+  "training_config": {
+    "num_episodes": 5,
+    "max_steps": 500,
+    "batch_size": 32,
+    "log_interval": 5,
+    "checkpoint_interval": 20,
+    "log_dir": "logs/debug",
+    "checkpoint_dir": "hrl/checkpoints",
+    "render": false,
+    "debug_level": 2
+  },
+  "curriculum_config": {
+    "enabled": true,
+    "stages": [
+      {
+        "name": "basic",
+        "difficulty": 0.2,
+        "duration": 0.4,
+        "opponent_strategies": {
+          "random": 0.7,
+          "direct": 0.3
+        }
+      },
+      {
+        "name": "intermediate",
+        "difficulty": 0.5,
+        "duration": 0.3,
+        "opponent_strategies": {
+          "random": 0.3,
+          "direct": 0.4,
+          "defensive": 0.2,
+          "coordinated": 0.1
+        }
+      },
+      {
+        "name": "advanced",
+        "difficulty": 0.8,
+        "duration": 0.2,
+        "opponent_strategies": {
+          "random": 0.1,
+          "direct": 0.2,
+          "defensive": 0.3,
+          "aggressive": 0.2,
+          "coordinated": 0.2
+        }
+      },
+      {
+        "name": "expert",
+        "difficulty": 1.0,
+        "duration": 0.1,
+        "opponent_strategies": {
+          "defensive": 0.2,
+          "aggressive": 0.3,
+          "coordinated": 0.5
+        }
+      }
+    ]
+  },
+  "self_play_config": {
+    "enabled": true,
+    "start_episode": 50,
+    "frequency": 0.3,
+    "policy_bank_size": 3,
+    "policy_bank_update_freq": 20
+  }
+}

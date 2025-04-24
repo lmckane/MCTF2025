@@ -292,4 +292,7 @@ class MetricsTracker:
             plt.close()
             
         except ImportError:
-            print("Matplotlib not installed. Skipping plotting.") 
+            print("Matplotlib not installed. Skipping plotting.")
+
+# Create an alias for backward compatibility
+Metrics = MetricsTracker 

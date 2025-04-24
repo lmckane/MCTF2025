@@ -60,29 +60,39 @@ class TeamCoordinator:
         
     def assign_initial_roles(self, state: Dict[str, Any]):
         """
-        Make initial role assignments based on the starting state.
+        Assign initial roles to team agents.
         
         Args:
             state: Current game state
         """
         # Get agents on our team
         team_agents = [agent for agent in state['agents'] 
-                       if agent['team'] == self.team_id]
+                     if agent['team'] == self.team_id]
         
-        # Baseline role distribution (1 defender, rest attackers for small teams)
-        if len(team_agents) <= 3:
-            # With 3 or fewer agents, assign 1 defender and the rest attackers
-            roles_to_assign = [AgentRole.DEFENDER] + [AgentRole.ATTACKER] * (len(team_agents) - 1)
-        else:
-            # With more agents, assign 1 defender, 1 interceptor, and the rest attackers
-            roles_to_assign = [AgentRole.DEFENDER, AgentRole.INTERCEPTOR] + [AgentRole.ATTACKER] * (len(team_agents) - 2)
-            
+        # More aggressive strategy: 2 attackers, 1 defender
+        num_defenders = 1
+        num_attackers = len(team_agents) - num_defenders
+        
+        # Ensure at least one attacker if possible
+        if num_attackers < 1 and len(team_agents) > 0:
+            num_defenders = len(team_agents) - 1
+            num_attackers = 1
+        
+        # Create role assignments
+        roles_to_assign = ([AgentRole.DEFENDER] * num_defenders + 
+                         [AgentRole.ATTACKER] * num_attackers)
+        
         # Shuffle roles to prevent predictable assignments
         random.shuffle(roles_to_assign)
         
         # Assign roles to agents
         self.agent_roles = {}
         for i, agent in enumerate(team_agents):
+            # Add 'id' field if it doesn't exist
+            if isinstance(agent, dict) and 'id' not in agent:
+                # Use index as fallback ID
+                agent['id'] = i
+                
             agent_id = agent['id'] if isinstance(agent, dict) else agent.id
             self.agent_roles[agent_id] = roles_to_assign[i]
         
@@ -120,19 +130,64 @@ class TeamCoordinator:
         our_flag_captured = self._is_our_flag_captured(state)
         we_have_enemy_flag = self._we_have_enemy_flag(state)
         
+        # Calculate game progression (0 to 1)
+        max_steps = 1000  # Adjust based on your game configuration
+        game_progress = min(1.0, self.step_counter / max_steps)
+        
+        # Count tagged and untagged agents
+        tagged_agents = sum(1 for agent in team_agents if (agent['is_tagged'] if isinstance(agent, dict) else agent.is_tagged))
+        active_agents = len(team_agents) - tagged_agents
+        
         # Adjusted role distribution based on game state
         if our_flag_captured:
             # Prioritize interceptors to recover our flag
-            roles_to_assign = [AgentRole.INTERCEPTOR] * 2 + [AgentRole.ATTACKER] * (len(team_agents) - 2)
+            # Use 2 interceptors if we have enough active agents, otherwise use all for interception
+            if active_agents >= 2:
+                roles_to_assign = [AgentRole.INTERCEPTOR] * 2 + [AgentRole.ATTACKER] * (len(team_agents) - 2)
+            else:
+                roles_to_assign = [AgentRole.INTERCEPTOR] * active_agents + [AgentRole.ATTACKER] * (len(team_agents) - active_agents)
         elif we_have_enemy_flag:
-            # Protect the flag carrier with defenders
-            roles_to_assign = [AgentRole.DEFENDER] * 2 + [AgentRole.ATTACKER] * (len(team_agents) - 2)
+            # Protect flag carrier and optimize for scoring
+            flag_carrier_id = None
+            for i, agent in enumerate(team_agents):
+                # Add 'id' field if it doesn't exist
+                if isinstance(agent, dict) and 'id' not in agent:
+                    agent['id'] = i
+                
+                agent_has_flag = agent['has_flag'] if isinstance(agent, dict) else agent.has_flag
+                if agent_has_flag:
+                    flag_carrier_id = agent['id'] if isinstance(agent, dict) else agent.id
+                    break
+            
+            # More defenders in early game, more attackers in late game
+            if game_progress < 0.7:
+                # Early/mid game: protect carrier with defenders
+                roles_to_assign = [AgentRole.DEFENDER] * 2 + [AgentRole.ATTACKER] * (len(team_agents) - 2)
+            else:
+                # Late game: push for victory with more attackers
+                roles_to_assign = [AgentRole.DEFENDER] * 1 + [AgentRole.ATTACKER] * (len(team_agents) - 1)
         elif self.own_flag_threat > 0.7:  # High threat to our flag
             # Increase defense when our flag is threatened
             roles_to_assign = [AgentRole.DEFENDER] * 2 + [AgentRole.ATTACKER] * (len(team_agents) - 2)
+        elif self.own_flag_threat > 0.4:  # Medium threat
+            # Balanced team with one interceptor to neutralize approaching threats
+            roles_to_assign = [AgentRole.DEFENDER, AgentRole.INTERCEPTOR] + [AgentRole.ATTACKER] * (len(team_agents) - 2)
         else:
-            # Standard balanced distribution
-            roles_to_assign = [AgentRole.DEFENDER] + [AgentRole.ATTACKER] * (len(team_agents) - 1)
+            # No immediate threats - adapt based on game progress
+            if game_progress < 0.3:
+                # Early game: aggressive stance with more attackers
+                roles_to_assign = [AgentRole.DEFENDER] + [AgentRole.ATTACKER] * (len(team_agents) - 1)
+            elif game_progress > 0.7:
+                # Late game: more balanced approach with emphasis on defense if score is favorable
+                if self._get_score_difference(state) > 0:
+                    # Winning: more defense to secure victory
+                    roles_to_assign = [AgentRole.DEFENDER] * 2 + [AgentRole.ATTACKER] * (len(team_agents) - 2)
+                else:
+                    # Losing: go aggressive
+                    roles_to_assign = [AgentRole.DEFENDER] + [AgentRole.ATTACKER] * (len(team_agents) - 1)
+            else:
+                # Mid game: standard balanced distribution
+                roles_to_assign = [AgentRole.DEFENDER] + [AgentRole.ATTACKER] * (len(team_agents) - 1)
             
         # Ensure we have at least one role per agent
         while len(roles_to_assign) < len(team_agents):
@@ -158,7 +213,11 @@ class TeamCoordinator:
         # Calculate suitability scores for each agent for each role
         suitability_scores = {}
         
-        for agent in team_agents:
+        for i, agent in enumerate(team_agents):
+            # Add 'id' field if it doesn't exist
+            if isinstance(agent, dict) and 'id' not in agent:
+                agent['id'] = i
+                
             agent_id = agent['id'] if isinstance(agent, dict) else agent.id
             position = np.array(agent['position'] if isinstance(agent, dict) else agent.position)
             
@@ -185,7 +244,11 @@ class TeamCoordinator:
         new_roles = {}
         
         # First, handle flag carriers - they should be attackers if they have enemy flag
-        for agent in team_agents:
+        for i, agent in enumerate(team_agents):
+            # Add 'id' field if it doesn't exist
+            if isinstance(agent, dict) and 'id' not in agent:
+                agent['id'] = i
+                
             agent_id = agent['id'] if isinstance(agent, dict) else agent.id
             has_flag = agent['has_flag'] if isinstance(agent, dict) else agent.has_flag
             
@@ -199,8 +262,8 @@ class TeamCoordinator:
         # Assign remaining roles to maximize suitability
         for role in roles_to_assign:
             if not team_agents or all(
-                (agent['id'] if isinstance(agent, dict) else agent.id) in assigned_agents 
-                for agent in team_agents
+                ((agent['id'] if 'id' in agent else i) if isinstance(agent, dict) else agent.id) in assigned_agents 
+                for i, agent in enumerate(team_agents)
             ):
                 break
                 
@@ -208,7 +271,11 @@ class TeamCoordinator:
             best_agent_id = None
             best_score = -1
             
-            for agent in team_agents:
+            for i, agent in enumerate(team_agents):
+                # Add 'id' field if it doesn't exist
+                if isinstance(agent, dict) and 'id' not in agent:
+                    agent['id'] = i
+                    
                 agent_id = agent['id'] if isinstance(agent, dict) else agent.id
                 if agent_id in assigned_agents:
                     continue
@@ -253,7 +320,11 @@ class TeamCoordinator:
         
         # Assess threat to our flag
         flag_threats = []
-        for agent in enemy_agents:
+        for i, agent in enumerate(enemy_agents):
+            # Add 'id' field if it doesn't exist
+            if isinstance(agent, dict) and 'id' not in agent:
+                agent['id'] = i + len(state['agents']) // 2  # Offset to avoid ID conflicts with team agents
+                
             position = np.array(agent['position'] if isinstance(agent, dict) else agent.position)
             distance_to_flag = np.linalg.norm(position - our_flag_position)
             
@@ -292,43 +363,126 @@ class TeamCoordinator:
         
         # Find enemy flag carrier if it exists
         enemy_carrier = None
+        carrier_id = None
         for flag in state['flags']:
             flag_team = flag['team'] if isinstance(flag, dict) else flag.team
             flag_captured = flag['is_captured'] if isinstance(flag, dict) else flag.is_captured
-            flag_carrier_id = flag['carrier_id'] if isinstance(flag, dict) else flag.carrier_id
             
             if flag_team == self.team_id and flag_captured:
+                carrier_id = flag['carrier_id'] if isinstance(flag, dict) else flag.carrier_id
                 # Find the carrier in agents
                 for enemy_agent in state['agents']:
+                    # Add 'id' field if it doesn't exist
+                    if isinstance(enemy_agent, dict) and 'id' not in enemy_agent:
+                        enemy_agent['id'] = state['agents'].index(enemy_agent)
+                        
                     enemy_id = enemy_agent['id'] if isinstance(enemy_agent, dict) else enemy_agent.id
-                    if enemy_id == flag_carrier_id:
+                    if enemy_id == carrier_id:
                         enemy_carrier = enemy_agent
                         break
         
         if enemy_carrier:
-            # High priority to intercept flag carrier
             carrier_pos = np.array(enemy_carrier['position'] if isinstance(enemy_carrier, dict) else enemy_carrier.position)
-            return 2.0 / (1.0 + np.linalg.norm(position - carrier_pos))
+            enemy_base = np.array(state['team_bases'][1 - self.team_id])
+            
+            # Get carrier velocity/direction if available in history
+            carrier_velocity = np.zeros(2)
+            if len(self.state_history) >= 2:
+                previous_state = self.state_history[-2]
+                for prev_enemy in previous_state['agents']:
+                    prev_enemy_id = prev_enemy['id'] if isinstance(prev_enemy, dict) else prev_enemy.id
+                    if prev_enemy_id == carrier_id:
+                        prev_pos = np.array(prev_enemy['position'] if isinstance(prev_enemy, dict) else prev_enemy.position)
+                        # Calculate velocity vector
+                        carrier_velocity = carrier_pos - prev_pos
+                        break
+            
+            # Predict where carrier is heading
+            # Blend between current velocity and direction to base
+            direction_to_base = enemy_base - carrier_pos
+            if np.linalg.norm(direction_to_base) > 0:
+                direction_to_base = direction_to_base / np.linalg.norm(direction_to_base)
+            
+            # If carrier has clear velocity, weight it higher, otherwise assume they're heading to base
+            if np.linalg.norm(carrier_velocity) > 0.5:
+                carrier_velocity = carrier_velocity / np.linalg.norm(carrier_velocity)
+                predicted_direction = carrier_velocity * 0.7 + direction_to_base * 0.3
+            else:
+                predicted_direction = direction_to_base
+            
+            if np.linalg.norm(predicted_direction) > 0:
+                predicted_direction = predicted_direction / np.linalg.norm(predicted_direction)
+            
+            # Calculate optimal interception point based on relative speeds and positions
+            my_speed = 1.0  # Assuming normalized speed
+            enemy_speed = 0.9  # Slightly disadvantage enemy for safer interception
+            
+            # Estimate direct distance and time for both agents
+            distance_to_carrier = np.linalg.norm(carrier_pos - position)
+            
+            # Interception time calculation - simplified for efficiency
+            # Try several potential interception points along carrier's predicted path
+            best_intercept_score = 0
+            best_intercept_distance = distance_to_carrier
+            
+            for t in range(5, 40, 5):  # Try interception points at 5, 10, 15... units ahead
+                potential_carrier_pos = carrier_pos + predicted_direction * t * enemy_speed
+                
+                # Check if this position is on the map
+                map_size = np.array(state.get('map_size', [100, 100]))
+                if np.any(potential_carrier_pos < 0) or np.any(potential_carrier_pos > map_size):
+                    continue
+                
+                distance_to_intercept = np.linalg.norm(potential_carrier_pos - position)
+                my_time = distance_to_intercept / my_speed
+                carrier_time = t
+                
+                # If we can get there before or at the same time as carrier, it's a good intercept point
+                if my_time <= carrier_time + 1:  # Add small buffer for safety
+                    intercept_score = 1.0 / (1.0 + my_time)
+                    if intercept_score > best_intercept_score:
+                        best_intercept_score = intercept_score
+                        best_intercept_distance = distance_to_intercept
+            
+            # If we can intercept, return high score, otherwise score based on direct distance
+            if best_intercept_score > 0:
+                return 3.0 * best_intercept_score  # Higher priority than standard interception
+            
+            # Fallback to direct distance if no good interception found
+            return 2.0 / (1.0 + best_intercept_distance * 0.5)  # Reduce distance penalty
         
         # Otherwise, look for closest enemy in our territory
         enemy_in_territory = []
         for enemy in state['agents']:
+            # Add 'id' field if it doesn't exist
+            if isinstance(enemy, dict) and 'id' not in enemy:
+                enemy['id'] = state['agents'].index(enemy)
+                
             enemy_team = enemy['team'] if isinstance(enemy, dict) else enemy.team
-            if enemy_team != self.team_id:
+            enemy_tagged = enemy['is_tagged'] if isinstance(enemy, dict) else enemy.is_tagged
+            
+            if enemy_team != self.team_id and not enemy_tagged:
                 enemy_pos = np.array(enemy['position'] if isinstance(enemy, dict) else enemy.position)
                 # Check if enemy is in our territory
                 if self._is_in_our_territory(enemy_pos, state):
-                    distance = np.linalg.norm(position - enemy_pos)
-                    enemy_in_territory.append((distance, enemy_pos))
+                    # Calculate threat level based on proximity to our flag
+                    our_flag_pos = self._get_our_flag_position(state)
+                    distance_to_flag = np.linalg.norm(enemy_pos - our_flag_pos)
+                    distance_to_agent = np.linalg.norm(position - enemy_pos)
+                    
+                    # Higher score for enemies closer to our flag
+                    flag_threat = max(0, 1.0 - distance_to_flag / 100)
+                    intercept_score = (1.0 / (1.0 + distance_to_agent)) * (1.0 + flag_threat * 2)
+                    enemy_in_territory.append((distance_to_agent, intercept_score, enemy_pos))
         
         if enemy_in_territory:
-            # Sort by distance
-            enemy_in_territory.sort(key=lambda x: x[0])
-            closest_enemy_distance, _ = enemy_in_territory[0]
-            return 1.0 / (1.0 + closest_enemy_distance)
+            # Sort by intercept score (higher is better)
+            enemy_in_territory.sort(key=lambda x: x[1], reverse=True)
+            best_score = enemy_in_territory[0][1]
+            return best_score
         
-        # If no specific targets, lower suitability
-        return 0.2
+        # If no specific targets, lower suitability but still non-zero
+        return 0.3
     
     def _is_in_our_territory(self, position: np.ndarray, state: Dict[str, Any]) -> bool:
         """
@@ -339,28 +493,25 @@ class TeamCoordinator:
             state: Current game state
             
         Returns:
-            True if position is in our territory
+            True if position is in our territory, False otherwise
         """
-        territories = state['territories']
-        our_territory = territories[self.team_id]
-        
-        # Simple polygon check using ray casting algorithm
-        inside = False
-        n = len(our_territory)
-        p1 = our_territory[0]
-        
-        for i in range(1, n + 1):
-            p2 = our_territory[i % n]
-            if position[1] > min(p1[1], p2[1]):
-                if position[1] <= max(p1[1], p2[1]):
-                    if position[0] <= max(p1[0], p2[0]):
-                        if p1[1] != p2[1]:
-                            xinters = (position[1] - p1[1]) * (p2[0] - p1[0]) / (p2[1] - p1[1]) + p1[0]
-                        if p1[0] == p2[0] or position[0] <= xinters:
-                            inside = not inside
-            p1 = p2
-        
-        return inside
+        try:
+            # Safe conversion to numpy array
+            position = self._safe_array(position)
+            
+            # Get map parameters
+            map_size = self._safe_array(state.get('map_size', [100, 100]))
+            map_center = map_size / 2
+            
+            # Simple territory division - just use x-coordinate
+            # Adjust based on team ID (team 0 is on left, team 1 is on right)
+            if self.team_id == 0:
+                return position[0] < map_center[0]
+            else:
+                return position[0] >= map_center[0]
+        except Exception as e:
+            print(f"Error in _is_in_our_territory: {e}")
+            return False
     
     def _is_our_flag_captured(self, state: Dict[str, Any]) -> bool:
         """Check if our flag is captured."""
@@ -383,45 +534,52 @@ class TeamCoordinator:
         return False
     
     def _get_our_flag_position(self, state: Dict[str, Any]) -> np.ndarray:
-        """Get position of our flag."""
-        for flag in state['flags']:
-            flag_team = flag['team'] if isinstance(flag, dict) else flag.team
-            
-            if flag_team == self.team_id:
-                # If flag is captured, use base position instead
-                flag_captured = flag['is_captured'] if isinstance(flag, dict) else flag.is_captured
-                if flag_captured:
-                    return np.array(state['team_bases'][self.team_id])
-                else:
-                    return np.array(flag['position'] if isinstance(flag, dict) else flag.position)
+        """
+        Get the position of our flag.
         
-        # Fallback to base position if flag not found
-        return np.array(state['team_bases'][self.team_id])
+        Args:
+            state: Current game state
+            
+        Returns:
+            Position of our flag as numpy array
+        """
+        try:
+            for flag in state['flags']:
+                flag_team = flag['team'] if isinstance(flag, dict) else flag.team
+                if flag_team == self.team_id:
+                    position = flag['position'] if isinstance(flag, dict) else flag.position
+                    return self._safe_array(position)
+            # If flag not found, use our base position
+            if 'team_bases' in state and self.team_id < len(state['team_bases']):
+                return self._safe_array(state['team_bases'][self.team_id])
+            return np.array([0, 0])  # Fallback
+        except Exception as e:
+            print(f"Error in _get_our_flag_position: {e}")
+            return np.array([0, 0])  # Fallback
     
     def _get_enemy_flag_position(self, state: Dict[str, Any]) -> np.ndarray:
-        """Get position of the enemy flag."""
-        enemy_team = 1 - self.team_id  # Assuming two teams: 0 and 1
+        """
+        Get the position of enemy flag.
         
-        for flag in state['flags']:
-            flag_team = flag['team'] if isinstance(flag, dict) else flag.team
+        Args:
+            state: Current game state
             
-            if flag_team == enemy_team:
-                # If flag is captured, find carrier
-                flag_captured = flag['is_captured'] if isinstance(flag, dict) else flag.is_captured
-                if flag_captured:
-                    carrier_id = flag['carrier_id'] if isinstance(flag, dict) else flag.carrier_id
-                    for agent in state['agents']:
-                        agent_id = agent['id'] if isinstance(agent, dict) else agent.id
-                        if agent_id == carrier_id:
-                            return np.array(agent['position'] if isinstance(agent, dict) else agent.position)
-                            
-                    # If carrier not found, use enemy base as fallback
-                    return np.array(state['team_bases'][enemy_team])
-                else:
-                    return np.array(flag['position'] if isinstance(flag, dict) else flag.position)
-        
-        # Fallback to enemy base position
-        return np.array(state['team_bases'][enemy_team])
+        Returns:
+            Position of enemy flag as numpy array
+        """
+        try:
+            for flag in state['flags']:
+                flag_team = flag['team'] if isinstance(flag, dict) else flag.team
+                if flag_team != self.team_id:
+                    position = flag['position'] if isinstance(flag, dict) else flag.position
+                    return self._safe_array(position)
+            # If flag not found, use enemy base position
+            if 'team_bases' in state and (1 - self.team_id) < len(state['team_bases']):
+                return self._safe_array(state['team_bases'][1 - self.team_id])
+            return np.array([100, 100])  # Fallback
+        except Exception as e:
+            print(f"Error in _get_enemy_flag_position: {e}")
+            return np.array([100, 100])  # Fallback
     
     def get_coordination_data(self, agent_id: int, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -442,7 +600,11 @@ class TeamCoordinator:
         
         # Find all team agents
         team_agents = []
-        for agent in state['agents']:
+        for i, agent in enumerate(state['agents']):
+            # Add 'id' field if it doesn't exist
+            if isinstance(agent, dict) and 'id' not in agent:
+                agent['id'] = i
+                
             agent_team = agent['team'] if isinstance(agent, dict) else agent.team
             if agent_team == self.team_id:
                 team_agents.append(agent)
@@ -450,7 +612,11 @@ class TeamCoordinator:
         # Get positions of all team members
         team_positions = {}
         team_roles = {}
-        for agent in team_agents:
+        for i, agent in enumerate(team_agents):
+            # Add 'id' field if it doesn't exist
+            if isinstance(agent, dict) and 'id' not in agent:
+                agent['id'] = i
+                
             a_id = agent['id'] if isinstance(agent, dict) else agent.id
             team_positions[a_id] = np.array(agent['position'] if isinstance(agent, dict) else agent.position)
             team_roles[a_id] = self.get_agent_role(a_id)
@@ -494,7 +660,11 @@ class TeamCoordinator:
         """
         # Find the agent
         agent = None
-        for a in state['agents']:
+        for i, a in enumerate(state['agents']):
+            # Add 'id' field if it doesn't exist
+            if isinstance(a, dict) and 'id' not in a:
+                a['id'] = i
+                
             a_id = a['id'] if isinstance(a, dict) else a.id
             if a_id == agent_id:
                 agent = a
@@ -558,7 +728,7 @@ class TeamCoordinator:
                     # Use perpendicular vector to direct path for flanking
                     perp_vector = np.array([-direct_path[1], direct_path[0]])
                     if np.linalg.norm(perp_vector) > 0:
-                        perp_vector = perp_vector / np.linalg.norm(perp_vector)
+                        perp_vector = self._safe_normalize(perp_vector)
                         
                         # Check both left and right flanks for safety
                         left_flank = agent_position + perp_vector * 30  # 30 units to the left
@@ -575,10 +745,14 @@ class TeamCoordinator:
                             # Right flank is safer
                             waypoint = right_flank
                         
-                        # If waypoint is out of bounds, adjust
-                        waypoint = np.clip(waypoint, [0, 0], map_size)
+                        # Ensure waypoint is within map bounds (with safety margin)
+                        map_margin = map_size * 0.1
+                        # Create lower and upper bounds as separate arrays
+                        lower_bound = np.array([map_margin, map_margin])
+                        upper_bound = map_size - map_margin
+                        waypoint = self._safe_clip(waypoint, lower_bound, upper_bound)
                         
-                        # Return intermediate waypoint for safer path
+                        # Return the point
                         return waypoint
             
             # Default: return directly to base if path is safe or no better path found
@@ -658,7 +832,7 @@ class TeamCoordinator:
                     patrol_dir = center_dir * 0.3 + enemy_dir * 0.7
                     
                     if np.linalg.norm(patrol_dir) > 0:
-                        patrol_dir = patrol_dir / np.linalg.norm(patrol_dir)
+                        patrol_dir = self._safe_normalize(patrol_dir)
                         return flag_pos + patrol_dir * 15  # Patrol 15 units away from flag
                     else:
                         return flag_pos  # Fallback to flag position
@@ -770,8 +944,78 @@ class TeamCoordinator:
                 # Get perpendicular vectors to the direct path
                 if np.linalg.norm(direct_vector) > 0:
                     perp_vector = np.array([-direct_vector[1], direct_vector[0]])
-                    perp_vector = perp_vector / np.linalg.norm(perp_vector)
+                    perp_vector = self._safe_normalize(perp_vector)
                     
+                    # Enhanced flanking approach
+                    # Determine multiple potential flanking paths
+                    flank_angles = [30, 45, 60]  # Angles in degrees
+                    flank_distances = [25, 35, 45]  # Distances to try
+                    
+                    potential_flanks = []
+                    for angle_deg in flank_angles:
+                        for distance in flank_distances:
+                            angle_rad = angle_deg * np.pi / 180.0
+                            
+                            # Calculate left and right flanking points using rotation matrices
+                            cos_angle = np.cos(angle_rad)
+                            sin_angle = np.sin(angle_rad)
+                            
+                            # Left flank (rotate counter-clockwise)
+                            left_vector = np.array([
+                                direct_vector[0] * cos_angle - direct_vector[1] * sin_angle,
+                                direct_vector[0] * sin_angle + direct_vector[1] * cos_angle
+                            ])
+                            left_vector = left_vector / np.linalg.norm(left_vector)
+                            left_flank = agent_position + left_vector * distance
+                            
+                            # Right flank (rotate clockwise)
+                            right_vector = np.array([
+                                direct_vector[0] * cos_angle + direct_vector[1] * sin_angle,
+                                -direct_vector[0] * sin_angle + direct_vector[1] * cos_angle
+                            ])
+                            right_vector = right_vector / np.linalg.norm(right_vector)
+                            right_flank = agent_position + right_vector * distance
+                            
+                            # Calculate safety scores
+                            left_safety = self._calculate_path_safety(agent_position, left_flank, enemy_positions, state)
+                            right_safety = self._calculate_path_safety(agent_position, right_flank, enemy_positions, state)
+                            
+                            # Consider distance to enemy flag from this point
+                            left_flag_dist = np.linalg.norm(left_flank - enemy_flag_pos)
+                            right_flag_dist = np.linalg.norm(right_flank - enemy_flag_pos)
+                            
+                            # Combine safety with progress toward goal
+                            # Higher is better for both metrics
+                            left_score = left_safety * 2.0 - left_flag_dist * 0.01
+                            right_score = right_safety * 2.0 - right_flag_dist * 0.01
+                            
+                            # Ensure points are within map bounds
+                            map_size = self._safe_array(state.get('map_size', [100, 100]))
+                            try:
+                                if self._safe_compare(left_flank, np.array([0, 0]), 'all_gte') and self._safe_compare(left_flank, map_size, 'all_lte'):
+                                    potential_flanks.append((left_flank, left_score))
+                                if self._safe_compare(right_flank, np.array([0, 0]), 'all_gte') and self._safe_compare(right_flank, map_size, 'all_lte'):
+                                    potential_flanks.append((right_flank, right_score))
+                            except Exception as e:
+                                print(f"Error in flank bounds check: {e}")
+                                # Fallback behavior
+                                potential_flanks.append((left_flank, left_score))
+                                potential_flanks.append((right_flank, right_score))
+                    
+                    # Choose the best flanking option
+                    if potential_flanks:
+                        potential_flanks.sort(key=lambda x: x[1], reverse=True)
+                        best_flank, _ = potential_flanks[0]
+                        
+                        # Ensure waypoint is within map bounds (with safety margin)
+                        map_margin = map_size * 0.1
+                        # Create lower and upper bounds as separate arrays
+                        lower_bound = np.array([map_margin, map_margin])
+                        upper_bound = map_size - map_margin
+                        flank_point = self._safe_clip(best_flank, lower_bound, upper_bound)
+                        return flank_point
+                    
+                    # Fallback to original logic if no good flanks found
                     # Check both potential flanking paths
                     left_flank = agent_position + perp_vector * 30
                     right_flank = agent_position - perp_vector * 30
@@ -786,8 +1030,12 @@ class TeamCoordinator:
                     else:
                         flank_point = right_flank
                     
-                    # Make sure point is within map bounds
-                    flank_point = np.clip(flank_point, [0, 0], map_size)
+                    # Ensure waypoint is within map bounds (with safety margin)
+                    map_margin = map_size * 0.1
+                    # Create lower and upper bounds as separate arrays
+                    lower_bound = np.array([map_margin, map_margin])
+                    upper_bound = map_size - map_margin
+                    flank_point = self._safe_clip(flank_point, lower_bound, upper_bound)
                     return flank_point
             
             # Default to direct approach to flag if no enemies blocking
@@ -813,7 +1061,7 @@ class TeamCoordinator:
                 # Calculate where carrier is likely heading (toward their base)
                 carrier_to_base = enemy_base - flag_carrier_pos
                 if np.linalg.norm(carrier_to_base) > 0:
-                    carrier_direction = carrier_to_base / np.linalg.norm(carrier_to_base)
+                    carrier_direction = self._safe_normalize(carrier_to_base)
                     
                     # Intercept ahead of carrier's path
                     intercept_distance = min(30.0, np.linalg.norm(carrier_to_base) * 0.5)
@@ -890,7 +1138,7 @@ class TeamCoordinator:
                 patrol_point = our_flag_pos - threat_direction * 25
                 
                 # Make sure patrol point is within map bounds
-                patrol_point = np.clip(patrol_point, [0, 0], map_size)
+                patrol_point = self._safe_clip(patrol_point, np.array([0, 0]), map_size)
                 return patrol_point
             else:
                 # No clear threats - patrol around flag with dynamic pattern
@@ -900,7 +1148,7 @@ class TeamCoordinator:
                 # Create elliptical patrol that puts more emphasis on direction of enemy base
                 direction_to_enemy = enemy_base - our_flag_pos
                 if np.linalg.norm(direction_to_enemy) > 0:
-                    direction_to_enemy = direction_to_enemy / np.linalg.norm(direction_to_enemy)
+                    direction_to_enemy = self._safe_normalize(direction_to_enemy)
                     perpendicular = np.array([-direction_to_enemy[1], direction_to_enemy[0]])
                     
                     # Elongate patrol in the direction of potential threats
@@ -913,8 +1161,184 @@ class TeamCoordinator:
                     patrol_pos = our_flag_pos + np.array([patrol_radius * np.cos(angle), patrol_radius * np.sin(angle)])
                 
                 # Make sure patrol point is within map bounds
-                patrol_pos = np.clip(patrol_pos, [0, 0], map_size)
+                patrol_pos = self._safe_clip(patrol_pos, np.array([0, 0]), map_size)
                 return patrol_pos
         
         # Default: return to base
         return our_base 
+
+    def _get_score_difference(self, state: Dict[str, Any]) -> int:
+        """
+        Calculate the score difference between our team and opponent.
+        
+        Args:
+            state: Current game state
+            
+        Returns:
+            Score difference (positive if we're ahead, negative if behind)
+        """
+        if 'team_scores' in state:
+            our_score = state['team_scores'][self.team_id]
+            enemy_score = state['team_scores'][1 - self.team_id]
+            return our_score - enemy_score
+        return 0 
+
+    def _calculate_path_safety(self, start_pos: np.ndarray, end_pos: np.ndarray, 
+                             enemy_positions: List[np.ndarray], state: Dict[str, Any]) -> float:
+        """
+        Calculate how safe a path is based on enemy positions.
+        
+        Args:
+            start_pos: Starting position
+            end_pos: Ending position
+            enemy_positions: List of enemy positions
+            state: Current game state
+            
+        Returns:
+            Safety score (higher is safer)
+        """
+        # If no enemies, path is completely safe
+        if not enemy_positions:
+            return 100.0
+            
+        path_vector = end_pos - start_pos
+        path_length = np.linalg.norm(path_vector)
+        
+        if path_length < 0.001:
+            return 0.0  # Zero-length path
+            
+        path_direction = path_vector / path_length
+        
+        # Calculate minimum safe distance from any enemy
+        safety_radius = 20.0
+        
+        # Discretize the path and check safety at each point
+        num_checks = max(3, int(path_length / 10))
+        min_safety = float('inf')
+        
+        for i in range(num_checks + 1):
+            t = i / num_checks
+            check_point = start_pos + t * path_vector
+            
+            # Calculate safety at this point
+            min_enemy_dist = min(np.linalg.norm(check_point - enemy_pos) for enemy_pos in enemy_positions)
+            
+            # Update minimum safety along path
+            min_safety = min(min_safety, min_enemy_dist)
+        
+        # Calculate safety score - higher is safer
+        # Normalize to 0-100 range
+        if min_safety >= safety_radius * 2:
+            return 100.0  # Very safe
+        elif min_safety <= safety_radius * 0.5:
+            return 10.0   # Dangerous but not completely unsafe
+        else:
+            # Linear scaling between danger and safety thresholds
+            normalized_safety = (min_safety - safety_radius * 0.5) / (safety_radius * 1.5)
+            return 10.0 + 90.0 * normalized_safety 
+
+    def _safe_clip(self, value, min_val, max_val):
+        """
+        Safely clips a value between minimum and maximum values,
+        ensuring all inputs are proper numpy arrays.
+        
+        Args:
+            value: The value to clip
+            min_val: The minimum allowed value
+            max_val: The maximum allowed value
+            
+        Returns:
+            Clipped value as numpy array
+        """
+        try:
+            # Ensure all inputs are numpy arrays
+            if not isinstance(value, np.ndarray):
+                value = np.array(value)
+            if not isinstance(min_val, np.ndarray):
+                min_val = np.array(min_val)
+            if not isinstance(max_val, np.ndarray):
+                max_val = np.array(max_val)
+                
+            # Extract scalars if needed
+            if isinstance(min_val, np.ndarray) and min_val.size == 1:
+                min_val = min_val.item()
+            if isinstance(max_val, np.ndarray) and max_val.size == 1:
+                max_val = max_val.item()
+                
+            # Perform clip operation
+            return np.clip(value, min_val, max_val)
+        except Exception as e:
+            print(f"Error in safe_clip: {e}")
+            # Return original value if clip fails
+            return value 
+
+    def _safe_array(self, value):
+        """
+        Safely convert a value to a numpy array.
+        
+        Args:
+            value: Value to convert (list, tuple, scalar, or numpy array)
+            
+        Returns:
+            Value as a numpy array
+        """
+        try:
+            if isinstance(value, np.ndarray):
+                return value
+            return np.array(value)
+        except Exception as e:
+            print(f"Error in safe_array conversion: {e}")
+            # Fallback to empty array
+            return np.array([0, 0])
+    
+    def _safe_compare(self, array1, array2, comparison_op='all_gte'):
+        """
+        Safely compare two arrays with specified comparison operation.
+        
+        Args:
+            array1: First array
+            array2: Second array
+            comparison_op: Type of comparison ('all_gte', 'all_lte', 'all_gt', 'all_lt')
+            
+        Returns:
+            Boolean result of comparison
+        """
+        try:
+            # Ensure both are numpy arrays
+            array1 = self._safe_array(array1)
+            array2 = self._safe_array(array2)
+            
+            # Perform the comparison
+            if comparison_op == 'all_gte':
+                return np.all(array1 >= array2)
+            elif comparison_op == 'all_lte':
+                return np.all(array1 <= array2)
+            elif comparison_op == 'all_gt':
+                return np.all(array1 > array2)
+            elif comparison_op == 'all_lt':
+                return np.all(array1 < array2)
+            else:
+                return False
+        except Exception as e:
+            print(f"Error in safe_compare: {e}")
+            return False 
+
+    def _safe_normalize(self, vector):
+        """
+        Safely normalize a vector to unit length.
+        
+        Args:
+            vector: Vector to normalize
+            
+        Returns:
+            Normalized vector, or original if norm is zero
+        """
+        try:
+            vector = self._safe_array(vector)
+            norm = np.linalg.norm(vector)
+            if norm > 0:
+                return vector / norm
+            return vector
+        except Exception as e:
+            print(f"Error in safe_normalize: {e}")
+            return vector 
