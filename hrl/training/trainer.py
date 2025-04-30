@@ -245,11 +245,11 @@ class Trainer:
                 
                 # Log metrics
                 if episode % self.log_interval == 0 or episode == stage_episodes - 1:
-                    self._log_detailed_metrics(episode, total_episodes, stage, episode_time)
+                    self._log_detailed_metrics(episode, total_episodes, stage_idx, episode_time)
                 
                 # Print progress
                 if episode % max(1, stage_episodes // 100) == 0:
-                    self._print_progress(episode, stage_episodes, total_episodes, stage)
+                    self._print_progress(episode, stage_episodes, total_episodes, stage_idx)
                 
                 # Save checkpoint
                 if episode % self.checkpoint_interval == 0:
@@ -257,7 +257,7 @@ class Trainer:
                         stage_name = stage.get('name', 'stage')
                         self.save_checkpoint(f"{stage_name}_episode_{episode}")
                     else:
-                        self.save_checkpoint(f"stage_{stage}_episode_{episode}")
+                        self.save_checkpoint(f"stage_{stage_idx}_episode_{episode}")
                     
                 # Update adversarial opponent
                 if episode % self.adversarial_update_freq == 0:
@@ -276,7 +276,7 @@ class Trainer:
         self.save_checkpoint(f"final_model")
         self.metrics.save_metrics(f"{self.log_dir}/final_metrics.json")
         
-    def _print_progress(self, episode, episodes_in_stage, total_episodes, stage):
+    def _print_progress(self, episode, episodes_in_stage, total_episodes, stage_idx):
         """Print training progress in a concise format."""
         # Calculate recent statistics
         recent_rewards = self.episode_rewards[-100:]
@@ -287,12 +287,11 @@ class Trainer:
         progress = episode / episodes_in_stage * 100
         
         # Handle stage parameter correctly whether it's a dict or an int
-        if isinstance(stage, dict):
-            stage_name = stage.get('name', 'Unknown')
-            stage_idx = self.curriculum_stages.index(stage) if stage in self.curriculum_stages else 0
+        if isinstance(stage_idx, dict):
+            stage_name = stage_idx.get('name', 'Unknown')
+            stage_idx = self.curriculum_stages.index(stage_idx) if stage_idx in self.curriculum_stages else 0
             stage_display = f"[Stage {stage_idx+1}/{len(self.curriculum_stages)}] {stage_name}"
-        else:  # stage is an int
-            stage_idx = stage
+        else:  # stage_idx is an int
             stage_name = self.curriculum_stages[stage_idx]['name'] if 0 <= stage_idx < len(self.curriculum_stages) else "Unknown"
             stage_display = f"[Stage {stage_idx+1}/{len(self.curriculum_stages)}] {stage_name}"
         
@@ -310,7 +309,7 @@ class Trainer:
         import sys
         sys.stdout.flush()
         
-    def _log_detailed_metrics(self, episode, total_episodes, stage, episode_time):
+    def _log_detailed_metrics(self, episode, total_episodes, stage_idx, episode_time):
         """Log detailed metrics and print summary."""
         # Get recent metrics
         recent_rewards = self.episode_rewards[-100:]
@@ -320,8 +319,7 @@ class Trainer:
         
         # Log to metrics tracker
         self.metrics.log_training_metric('episode', total_episodes)
-        self.metrics.log_training_metric('stage', stage if isinstance(stage, int) else 
-                                         self.curriculum_stages.index(stage) if stage in self.curriculum_stages else 0)
+        self.metrics.log_training_metric('stage', stage_idx)
         self.metrics.log_game_metric('win_rate', np.mean(recent_wins))
         self.metrics.log_training_metric('avg_reward', np.mean(recent_rewards))
         self.metrics.log_training_metric('episode_length', np.mean(recent_lengths))
@@ -331,16 +329,12 @@ class Trainer:
         if self.debug_level >= 1:
             print(f"\n{'-'*80}")
             # Handle stage parameter correctly whether it's a dict or an int
-            if isinstance(stage, dict):
-                stage_name = stage.get('name', 'Unknown')
+            if isinstance(stage_idx, dict):
+                stage_name = stage_idx.get('name', 'Unknown')
                 print(f"Episode {total_episodes} Summary (Stage: {stage_name})")
-            else:  # stage is an int
-                stage_idx = stage
-                if 0 <= stage_idx < len(self.curriculum_stages):
-                    stage_name = self.curriculum_stages[stage_idx]['name']
-                    print(f"Episode {total_episodes} Summary (Stage {stage_idx+1}: {stage_name})")
-                else:
-                    print(f"Episode {total_episodes} Summary (Stage {stage_idx+1})")
+            else:  # stage_idx is an int
+                stage_name = self.curriculum_stages[stage_idx]['name']
+                print(f"Episode {total_episodes} Summary (Stage {stage_idx+1}: {stage_name})")
             
             print(f"Time: {episode_time:.2f}s, Steps: {recent_lengths[-1]}")
             print(f"Recent Stats (last 100 episodes):")

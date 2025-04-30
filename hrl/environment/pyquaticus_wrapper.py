@@ -75,21 +75,29 @@ class PyquaticusWrapper:
         self.team_scores = [0, 0]
         self.map_size = np.array(pyq_config['env_bounds'])
         self.observation = None
-        
+        self.last_env_info = None # Add field to store env info
+
+        # Store team base locations from config (or defaults)
+        default_bases = [np.array([0, 50]), np.array([100, 50])]
+        self.env_team_bases = [
+            np.array(base) for base in pyq_config.get('team_bases', default_bases)
+        ]
+
         # Initialize environment
         self.reset()
     
     def reset(self) -> Dict[str, Any]:
         """Reset the environment and return initial observation."""
-        self.env.reset(seed=None)
+        initial_obs_dict, initial_info_dict = self.env.reset(seed=None) # Capture reset return values
         self.step_count = 0
         self.team_scores = [0, 0]
-        
-        # Get observation from first agent
-        obs = self.env.observe('agent_0')
-        
-        # Convert observation to format expected by trainer
-        self.observation = self._format_observation(obs)
+        self.last_env_info = initial_info_dict # Store env info
+
+        # Get observation from the returned dictionary
+        obs = initial_obs_dict['agent_0']
+
+        # Convert observation to format expected by trainer, passing env info
+        self.observation = self._format_observation(obs, self.last_env_info)
         return self.observation
     
     def step(self, action) -> Tuple[Dict[str, Any], float, bool, Dict[str, Any]]:
@@ -109,104 +117,148 @@ class PyquaticusWrapper:
         pyq_action = self._format_action(action)
         
         # Create action dictionary for all agents
+        # TODO: Extend this for multi-agent control if needed
         action_dict = {'agent_0': pyq_action}
         
-        # Step the environment
-        self.env.step(action_dict)
+        # Step the environment and capture return values
+        obs_dict, reward_dict, termination_dict, truncation_dict, info_dict = self.env.step(action_dict)
+        self.last_env_info = info_dict # Store env info
         
-        # Get observation, reward, termination status for our agent
-        obs = self.env.observe('agent_0')
-        reward = self.env.get_rewards()['agent_0'] if 'agent_0' in self.env.get_rewards() else 0.0
-        done = self.env.terminations['agent_0']
+        # Get observation, reward, termination status for our agent from returned dicts
+        obs = obs_dict.get('agent_0')
+        reward = reward_dict.get('agent_0', 0.0)
+        terminated = termination_dict.get('agent_0', False)
+        truncated = truncation_dict.get('agent_0', False) # PettingZoo uses truncated for time limits etc.
         
         # Update step count
         self.step_count += 1
         
-        # Update team scores from Pyquaticus environment
+        # Update team scores from the environment info dictionary
         self.team_scores = [
-            self.env.par_env.env.blue_score,
-            self.env.par_env.env.red_score
+            self.last_env_info.get('blue_score', self.team_scores[0]), # Get from info dict
+            self.last_env_info.get('red_score', self.team_scores[1])   # Get from info dict
         ]
         
-        # Create info dictionary
+        # Create info dictionary - merge internal info with env info?
         info = {
             'step': self.step_count,
             'team_scores': self.team_scores,
-            'done_reason': 'time_limit' if self.step_count >= self.max_steps else 'game_end'
+            'done_reason': 'time_limit' if self.step_count >= self.max_steps else 'game_end',
+            'env_info': info_dict # Include original info dict
         }
         
-        # Format observation for trainer
-        self.observation = self._format_observation(obs)
+        # Format observation for trainer, passing env info
+        self.observation = self._format_observation(obs, self.last_env_info)
         
-        # Check if done due to max steps
-        if self.step_count >= self.max_steps:
-            done = True
+        # Check if done due to termination, truncation, or max steps
+        done = terminated or truncated or (self.step_count >= self.max_steps)
         
         return self.observation, reward, done, info
     
-    def _format_observation(self, obs) -> Dict[str, Any]:
+    def _format_observation(self, obs, env_info) -> Dict[str, Any]:
         """
         Convert Pyquaticus observation to format expected by trainer.
+        Uses the env_info dict for global state.
         
         Args:
-            obs: Pyquaticus observation
+            obs: Pyquaticus observation for the specific agent (potentially unused if info has all)
+            env_info: Info dictionary from the environment step/reset
             
         Returns:
             formatted_obs: Observation in GameEnvironment format
         """
-        # Extract info from Pyquaticus observation
+        # Extract info from Pyquaticus observation (agent's perspective)
         agent_obs = obs
         
-        # For now, create a simplified observation with agent positions and flags
-        # This can be expanded based on what the trainer expects
+        # Use env_info dictionary to get global state (agent and flag positions/status)
         agents_data = []
-        for i in range(self.env.par_env.team_size * 2):  # Both teams
+        team_size = self.config.get('num_agents', 3) # Get team size from config
+        env_agents = env_info.get('agents') # Get agent states from info dict
+
+        for i in range(team_size * 2):  # Both teams
             agent_id = f'agent_{i}'
-            team = 0 if i < self.env.par_env.team_size else 1
-            
-            # Try to get position from observation
-            if hasattr(self.env.par_env.env, 'agents') and i < len(self.env.par_env.env.agents):
-                position = self.env.par_env.env.agents[i].position
-                velocity = self.env.par_env.env.agents[i].velocity
-                is_tagged = self.env.par_env.env.agents[i].is_tagged
-                has_flag = self.env.par_env.env.agents[i].has_flag
-            else:
-                # Use default values if not available
-                position = np.zeros(2)
-                velocity = np.zeros(2)
-                is_tagged = False
-                has_flag = False
-            
+            team = 0 if i < team_size else 1
+
+            # Default values
+            position = np.zeros(2)
+            velocity = np.zeros(2)
+            is_tagged = False
+            has_flag = False
+
+            # Try to get state from env_info['agents'] list
+            # Assuming env_agents is a list ordered by agent index
+            if env_agents and i < len(env_agents):
+                agent_state = env_agents[i]
+                # Check if agent_state is an object or dict
+                if hasattr(agent_state, 'position'):
+                    position = agent_state.position
+                    velocity = agent_state.velocity
+                    is_tagged = agent_state.is_tagged
+                    has_flag = agent_state.has_flag
+                elif isinstance(agent_state, dict):
+                    position = agent_state.get('position', position)
+                    velocity = agent_state.get('velocity', velocity)
+                    is_tagged = agent_state.get('is_tagged', is_tagged)
+                    has_flag = agent_state.get('has_flag', has_flag)
+
+            # Calculate health based on tagged status
+            health = 0.0 if is_tagged else 1.0
+
             agents_data.append({
                 'id': i,
-                'position': position,
-                'velocity': velocity,
+                'position': np.array(position), # Ensure numpy array
+                'velocity': np.array(velocity), # Ensure numpy array
                 'has_flag': has_flag,
                 'is_tagged': is_tagged,
+                'health': health, # Add health key
                 'team': team
             })
-        
-        # Get flag information
+
+        # Get flag information from env_info
         flags_data = []
+        env_flags = env_info.get('flags') # Get flag states from info dict
         for i in range(2):  # Blue and Red flags
-            if hasattr(self.env.par_env.env, 'flags') and i < len(self.env.par_env.env.flags):
-                position = self.env.par_env.env.flags[i].position
-                is_captured = self.env.par_env.env.flags[i].is_captured
-            else:
-                position = np.zeros(2)
-                is_captured = False
-                
+            # Default values
+            position = np.zeros(2)
+            is_captured = False
+
+            # Try to get state from env_info['flags'] list
+            # Assuming env_flags is a list ordered by team index (0=Blue, 1=Red)
+            if env_flags and i < len(env_flags):
+                flag_state = env_flags[i]
+                if hasattr(flag_state, 'position'):
+                    position = flag_state.position
+                    is_captured = flag_state.is_captured
+                elif isinstance(flag_state, dict):
+                    position = flag_state.get('position', position)
+                    is_captured = flag_state.get('is_captured', is_captured)
+
             flags_data.append({
-                'position': position,
+                'position': np.array(position), # Ensure numpy array
                 'is_captured': is_captured,
                 'team': i
             })
         
+        # Get team base locations directly from the environment object
+        team_bases = None
+        if hasattr(self.env, 'team_bases'):
+            team_bases = self.env.team_bases
+
+        if team_bases is None:
+            # Use default positions if not found on env object
+            team_bases = [np.array([0, 50]), np.array([100, 50])]
+            if self.debug_level >= 1:
+                print("WARN: 'team_bases' not found on self.env. Using defaults.")
+        else:
+            # Ensure numpy arrays
+            team_bases = [np.array(base) for base in team_bases]
+
         # Create observation dictionary
         formatted_obs = {
             'agents': agents_data,
             'flags': flags_data,
             'team_scores': self.team_scores,
+            'team_bases': team_bases, # Add team base positions
             'step': self.step_count,
             'map_size': self.map_size
         }

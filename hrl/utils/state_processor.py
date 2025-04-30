@@ -28,6 +28,7 @@ class ProcessedState:
     agent_roles: np.ndarray  # Optional role assignment for agents (0=attacker, 1=defender, 2=interceptor)
     flag_positions: np.ndarray  # Position of each flag [x, y]
     flag_captures: np.ndarray  # Whether each flag is captured (1) or not (0)
+    flag_teams: np.ndarray  # Team associated with each flag (0 or 1)
     team_scores: np.ndarray  # Scores of each team
     step: int  # Current step count
     map_size: np.ndarray  # Map size [width, height]
@@ -111,11 +112,13 @@ class StateProcessor:
         # Initialize arrays for flag features
         flag_positions = np.zeros((num_flags, 2))
         flag_captures = np.zeros(num_flags)
+        flag_teams = np.zeros(num_flags)
         
         # Populate flag features
         for i, flag in enumerate(flags):
             flag_positions[i] = self._normalize_position(flag['position'])
             flag_captures[i] = float(flag['is_captured'])
+            flag_teams[i] = flag['team']
         
         # Normalize features if required
         if self.normalize:
@@ -157,6 +160,7 @@ class StateProcessor:
             agent_roles=agent_roles,
             flag_positions=flag_positions,
             flag_captures=flag_captures,
+            flag_teams=flag_teams,
             team_scores=team_scores,
             step=step,
             map_size=map_size,
